@@ -19,14 +19,17 @@ class Stop(BaseModel):
     window_end: datetime
     current_order: int
 
-class WebhookPayload(BaseModel):
+class EventPayload(BaseModel):
     """The exact JSON structure Node.js must send to Redis."""
-    event_type: str = Field(..., example="TRAFFIC_ALERT")
+    event_type: str = Field(..., example="TRAFFIC_ALERT") # PING, ROUTINE_CHECK, or TRAFFIC_ALERT
     route_id: str
     courier_id: str
     shift_end: time
     current_location: Location
     unvisited_stops: List[Stop]
+    weather_condition: str = Field(default="CLEAR")
+    traffic_severity: str = Field(default="LOW")
+    historical_time_mins: int = Field(default=20)
 
 # ==========================================
 # OUTPUT SCHEMAS (Python -> Node.js)
