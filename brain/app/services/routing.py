@@ -1,57 +1,84 @@
 import math
-from typing import List
+from typing import List, Dict
+from datetime import datetime, timedelta
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Euclidean distance fallback. (Can be swapped with TomTom API calls later)"""
+    """Euclidean distance fallback."""
     return math.sqrt((lat2 - lat1)**2 + (lon2 - lon1)**2)
 
-def calculate_total_distance(route_indices: List[int], dist_matrix: List[List[float]]) -> float:
-    """Calculates the total distance of a given sequence of nodes."""
-    total = 0.0
-    for i in range(len(route_indices) - 1):
-        total += dist_matrix[route_indices[i]][route_indices[i+1]]
-    return total
+def calculate_route_cost(route_indices: List[int], dist_matrix: List[List[float]], all_nodes: List[Dict], start_time: datetime) -> float:
+    """
+    Calculates the 'cost' of a route. Cost = Physical Distance + Time Penalties.
+    If a route makes the truck late for a time window, it gets a massive penalty.
+    """
+    total_cost = 0.0
+    current_time = start_time
 
-def two_opt(route_indices: List[int], dist_matrix: List[List[float]]) -> List[int]:
-    """
-    Standard 2-opt optimization algorithm.
-    Node 0 (current location) is strictly locked in place.
-    """
-    best_route = route_indices[:]
-    best_distance = calculate_total_distance(best_route, dist_matrix)
+    for i in range(len(route_indices) - 1):
+        from_idx = route_indices[i]
+        to_idx = route_indices[i+1]
+        
+        # 1. Add physical distance
+        distance = dist_matrix[from_idx][to_idx]
+        total_cost += distance
+        
+        # 2. Simulate travel time (Hackathon heuristic: 1 degree distance ~ 200 mins driving)
+        travel_minutes = distance * 200 
+        current_time += timedelta(minutes=travel_minutes)
+        
+        target_node = all_nodes[to_idx]
+        
+        # 3. Time Window Logic (Skip Node 0, as it is the current location without windows)
+        if to_idx != 0 and "window_start" in target_node:
+            # Parse ISO strings to Python datetimes (handling Z timezone safely)
+            window_start = datetime.fromisoformat(target_node["window_start"].replace('Z', '+00:00'))
+            window_end = datetime.fromisoformat(target_node["window_end"].replace('Z', '+00:00'))
+            
+            if current_time < window_start:
+                # The truck arrived too early. It must wait.
+                current_time = window_start
+            elif current_time > window_end:
+                # The truck is LATE. Apply a massive mathematical penalty!
+                late_minutes = (current_time - window_end).total_seconds() / 60.0
+                total_cost += (late_minutes * 10.0) # Severe penalty weight
+                
+        # 4. Add 5 minutes for the driver to drop off the package
+        current_time += timedelta(minutes=5)
+        
+    return total_cost
+
+def two_opt_with_windows(initial_route: List[int], dist_matrix: List[List[float]], all_nodes: List[Dict], start_time: datetime) -> List[int]:
+    """2-opt algorithm that evaluates time windows."""
+    best_route = initial_route[:]
+    best_cost = calculate_route_cost(best_route, dist_matrix, all_nodes, start_time)
     improvement = True
     
     while improvement:
         improvement = False
-        # Start at 1 because Node 0 is the truck's current location (cannot be swapped)
         for i in range(1, len(best_route) - 1):
             for j in range(i + 1, len(best_route)):
-                # Perform the 2-opt swap by reversing the sub-segment
+                # Try the swap
                 new_route = best_route[:i] + best_route[i:j+1][::-1] + best_route[j+1:]
-                new_distance = calculate_total_distance(new_route, dist_matrix)
+                new_cost = calculate_route_cost(new_route, dist_matrix, all_nodes, start_time)
                 
-                if new_distance < best_distance:
-                    best_distance = new_distance
+                # If this sequence has fewer late penalties and/or distance, keep it!
+                if new_cost < best_cost:
+                    best_cost = new_cost
                     best_route = new_route
                     improvement = True
                     
     return best_route
 
 def optimize_route(current_location: dict, unvisited_stops: List[dict]) -> dict:
-    """
-    Takes the current truck location and the remaining stops, 
-    and returns a new optimized 2-opt sequence.
-    """
-    print(f"🗺️ Nav Engine: 2-opt optimizing sequence for {len(unvisited_stops)} remaining stops...")
+    print(f"🗺️ Nav Engine: 2-opt (Time-Aware) optimizing sequence for {len(unvisited_stops)} stops...")
     
     if not unvisited_stops:
         return {"new_sequence": [], "time_saved_minutes": 0}
 
-    # 1. Build the Node List (Node 0 is the truck)
     all_nodes = [current_location] + unvisited_stops
     n = len(all_nodes)
     
-    # 2. Pre-compute the Distance Matrix for lightning-fast lookups
+    # Pre-compute distance matrix
     dist_matrix = [[0.0] * n for _ in range(n)]
     for i in range(n):
         for j in range(n):
@@ -61,33 +88,23 @@ def optimize_route(current_location: dict, unvisited_stops: List[dict]) -> dict:
                     all_nodes[j]["lat"], all_nodes[j]["lon"]
                 )
     
-    # 3. Create the initial, unoptimized route [0, 1, 2, ..., N-1]
+    # Establish "Now"
+    start_time = datetime.fromisoformat(current_location["timestamp"].replace('Z', '+00:00'))
+    
     initial_route = list(range(n))
-    initial_distance = calculate_total_distance(initial_route, dist_matrix)
     
-    # 4. Run the 2-opt algorithm
-    best_route_indices = two_opt(initial_route, dist_matrix)
-    final_distance = calculate_total_distance(best_route_indices, dist_matrix)
+    # Run the Time-Aware 2-opt
+    best_route_indices = two_opt_with_windows(initial_route, dist_matrix, all_nodes, start_time)
     
-    # 5. Extract the stop_ids (Ignoring Node 0, as it is just the starting point)
     optimized_sequence = [all_nodes[idx]["stop_id"] for idx in best_route_indices[1:]]
-    
-    # 6. Estimate real-world impact (MVP mock heuristic)
-    distance_saved = initial_distance - final_distance
-    # Multiply by an arbitrary constant to simulate minutes saved for the hackathon MVP
-    time_saved = int(distance_saved * 150)
-    if time_saved == 0 and distance_saved > 0:
-        time_saved = 2
-        
-    print(f"✅ Nav Engine: 2-opt complete. Distance reduced by {distance_saved:.4f}")
     
     return {
         "action_type": "RE-ROUTE",
-        "severity": "medium",
-        "reason": "Traffic congestion detected. Executed 2-opt optimization.",
+        "severity": "high",
+        "reason": "Optimized to protect critical time window deadlines.",
         "new_sequence": optimized_sequence,
         "impact": {
-            "time_saved_minutes": time_saved if time_saved > 0 else 5,
+            "time_saved_minutes": 15, # Hardcoded baseline for MVP
             "route_health": "STABLE"
         }
     }
