@@ -1,0 +1,38 @@
+{
+    "target": "delay_at_stop_min",
+    "expected_features": [
+        "road_type",
+        "vehicle_type",
+        "weather_condition",
+        "traffic_level",
+        "temperature_c",
+        "distance_from_prev_km",
+        "planned_travel_min",
+        "stop_sequence",
+        "package_weight_kg",
+        "road_incident"
+    ],
+    "feature_types": {
+        "categorical": [
+            "road_type",
+            "vehicle_type",
+            "weather_condition",
+            "traffic_level"
+        ],
+        "numeric": [
+            "temperature_c",
+            "distance_from_prev_km",
+            "planned_travel_min",
+            "stop_sequence",
+            "package_weight_kg"
+        ],
+        "binary": [
+            "temperature_c",
+            "distance_from_prev_km",
+            "planned_travel_min",
+            "stop_sequence",
+            "package_weight_kg",
+            "road_incident"
+        ]
+    }
+}
