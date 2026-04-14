@@ -1,67 +1,92 @@
 import math
 from typing import List, Dict
 from datetime import datetime, timedelta
+from app.services.ml_engine import predict_segment_delay
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Euclidean distance fallback."""
     return math.sqrt((lat2 - lat1)**2 + (lon2 - lon1)**2)
 
-def calculate_route_cost(route_indices: List[int], dist_matrix: List[List[float]], all_nodes: List[Dict], start_time: datetime) -> float:
+def build_time_matrix(all_nodes: List[Dict], vehicle_type: str, env_horizon: dict) -> List[List[float]]:
     """
-    Calculates the 'cost' of a route. Cost = Physical Distance + Time Penalties.
-    If a route makes the truck late for a time window, it gets a massive penalty.
+    Builds an ephemeral (dynamic) matrix of travel times between all nodes.
+    Base Time + ML Expected Delay = Total Segment Time.
     """
-    total_cost = 0.0
+    n = len(all_nodes)
+    time_matrix = [[0.0] * n for _ in range(n)]
+    
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                # 1. Calculate physical distance
+                distance = calculate_distance(
+                    all_nodes[i]["lat"], all_nodes[i]["lon"],
+                    all_nodes[j]["lat"], all_nodes[j]["lon"]
+                )
+                
+                # Baseline travel time heuristic (1 degree ~ 200 mins)
+                base_time_mins = distance * 200 
+                
+                # 2. Get the road type for the destination node
+                # (Node 0 is the current location, which has no incoming road type)
+                road_type = all_nodes[j].get("road_type", "urban") if j != 0 else "urban"
+                
+                # 3. Ask the ML Engine for the expected delay on this specific segment
+                ml_prediction = predict_segment_delay(road_type, vehicle_type, env_horizon)
+                expected_delay = ml_prediction["expected_delay_mins"]
+                
+                # 4. Total Expected Time for this segment
+                time_matrix[i][j] = base_time_mins + expected_delay
+                
+    return time_matrix
+
+def calculate_route_cost(route_indices: List[int], time_matrix: List[List[float]], all_nodes: List[Dict], start_time: datetime) -> float:
+    """Calculates cost based purely on Time Matrix + Time Window Penalties."""
+    total_cost_mins = 0.0
     current_time = start_time
 
     for i in range(len(route_indices) - 1):
         from_idx = route_indices[i]
         to_idx = route_indices[i+1]
         
-        # 1. Add physical distance
-        distance = dist_matrix[from_idx][to_idx]
-        total_cost += distance
-        
-        # 2. Simulate travel time (Hackathon heuristic: 1 degree distance ~ 200 mins driving)
-        travel_minutes = distance * 200 
+        # 1. Add the ML-Adjusted Travel Time
+        travel_minutes = time_matrix[from_idx][to_idx]
+        total_cost_mins += travel_minutes
         current_time += timedelta(minutes=travel_minutes)
         
         target_node = all_nodes[to_idx]
         
-        # 3. Time Window Logic (Skip Node 0, as it is the current location without windows)
+        # 2. Time Window Logic
         if to_idx != 0 and "window_start" in target_node:
-            # Parse ISO strings to Python datetimes (handling Z timezone safely)
             window_start = datetime.fromisoformat(target_node["window_start"].replace('Z', '+00:00'))
             window_end = datetime.fromisoformat(target_node["window_end"].replace('Z', '+00:00'))
             
             if current_time < window_start:
-                # The truck arrived too early. It must wait.
+                # Wait for window to open
                 current_time = window_start
             elif current_time > window_end:
-                # The truck is LATE. Apply a massive mathematical penalty!
+                # Severe Penalty: 10x multiplier for every minute late
                 late_minutes = (current_time - window_end).total_seconds() / 60.0
-                total_cost += (late_minutes * 10.0) # Severe penalty weight
+                total_cost_mins += (late_minutes * 10.0) 
                 
-        # 4. Add 5 minutes for the driver to drop off the package
+        # 3. Add 5 minutes for package drop-off
         current_time += timedelta(minutes=5)
         
-    return total_cost
+    return total_cost_mins
 
-def two_opt_with_windows(initial_route: List[int], dist_matrix: List[List[float]], all_nodes: List[Dict], start_time: datetime) -> List[int]:
-    """2-opt algorithm that evaluates time windows."""
+def two_opt_with_windows(initial_route: List[int], time_matrix: List[List[float]], all_nodes: List[Dict], start_time: datetime) -> List[int]:
+    """2-opt local search utilizing the ML Time Matrix."""
     best_route = initial_route[:]
-    best_cost = calculate_route_cost(best_route, dist_matrix, all_nodes, start_time)
+    best_cost = calculate_route_cost(best_route, time_matrix, all_nodes, start_time)
     improvement = True
     
     while improvement:
         improvement = False
         for i in range(1, len(best_route) - 1):
             for j in range(i + 1, len(best_route)):
-                # Try the swap
                 new_route = best_route[:i] + best_route[i:j+1][::-1] + best_route[j+1:]
-                new_cost = calculate_route_cost(new_route, dist_matrix, all_nodes, start_time)
+                new_cost = calculate_route_cost(new_route, time_matrix, all_nodes, start_time)
                 
-                # If this sequence has fewer late penalties and/or distance, keep it!
                 if new_cost < best_cost:
                     best_cost = new_cost
                     best_route = new_route
@@ -69,42 +94,39 @@ def two_opt_with_windows(initial_route: List[int], dist_matrix: List[List[float]
                     
     return best_route
 
-def optimize_route(current_location: dict, unvisited_stops: List[dict]) -> dict:
-    print(f"🗺️ Nav Engine: 2-opt (Time-Aware) optimizing sequence for {len(unvisited_stops)} stops...")
+def optimize_route(current_location: dict, unvisited_stops: List[dict], vehicle_type: str, env_horizon: dict) -> dict:
+    """
+    Entry point for the Nav Engine.
+    Builds the ML Time Matrix and runs the time-aware 2-opt.
+    """
+    print(f"🗺️ Nav Engine: Generating Spatio-Temporal Matrix for {len(unvisited_stops)} segments...")
     
     if not unvisited_stops:
-        return {"new_sequence": [], "time_saved_minutes": 0}
+        return {"new_sequence": [], "time_saved_minutes": 0, "total_route_time": 0}
 
     all_nodes = [current_location] + unvisited_stops
     n = len(all_nodes)
     
-    # Pre-compute distance matrix
-    dist_matrix = [[0.0] * n for _ in range(n)]
-    for i in range(n):
-        for j in range(n):
-            if i != j:
-                dist_matrix[i][j] = calculate_distance(
-                    all_nodes[i]["lat"], all_nodes[i]["lon"],
-                    all_nodes[j]["lat"], all_nodes[j]["lon"]
-                )
+    # 1. Build the ML-Adjusted Time Matrix (Dynamic Horizon)
+    time_matrix = build_time_matrix(all_nodes, vehicle_type, env_horizon)
     
-    # Establish "Now"
+    # 2. Establish "Now"
     start_time = datetime.fromisoformat(current_location["timestamp"].replace('Z', '+00:00'))
     
+    # 3. Run the Algorithm
     initial_route = list(range(n))
-    
-    # Run the Time-Aware 2-opt
-    best_route_indices = two_opt_with_windows(initial_route, dist_matrix, all_nodes, start_time)
+    best_route_indices = two_opt_with_windows(initial_route, time_matrix, all_nodes, start_time)
     
     optimized_sequence = [all_nodes[idx]["stop_id"] for idx in best_route_indices[1:]]
     
+    # Get final simulated cost of the new route to pass back to the dispatcher logic
+    final_cost = calculate_route_cost(best_route_indices, time_matrix, all_nodes, start_time)
+    
     return {
-        "action_type": "RE-ROUTE",
-        "severity": "high",
-        "reason": "Optimized to protect critical time window deadlines.",
         "new_sequence": optimized_sequence,
         "impact": {
-            "time_saved_minutes": 15, # Hardcoded baseline for MVP
+            "time_saved_minutes": 0, # Will be calculated by the Dispatcher delta logic
             "route_health": "STABLE"
-        }
+        },
+        "_debug_final_cost": final_cost # Useful for internal worker logic
     }
