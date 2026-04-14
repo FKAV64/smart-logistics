@@ -1,88 +1,59 @@
+import joblib
 import os
 import pandas as pd
-import joblib
 
-MODEL_PATH = "trained_models/xgboost_delay_model.pkl"
+# ==========================================
+# 1. LOAD THE BRAIN (ON STARTUP)
+# ==========================================
+# Loaded OUTSIDE the function so it only hits the hard drive once when the server boots.
+MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../trained_models/xgboost_delay_model.pkl"))
 
-def predict_segment_delay(
-    road_type: str, 
-    vehicle_type: str, 
-    env: dict
-) -> dict:
+try:
+    ml_pipeline = joblib.load(MODEL_PATH)
+    print(f"🧠 SUCCESS: Elite XGBoost Model loaded from {MODEL_PATH}")
+except Exception as e:
+    print(f"⚠️ CRITICAL: Could not load ML model. Did you run the Jupyter Notebook? Error: {e}")
+    ml_pipeline = None
+
+# ==========================================
+# 2. THE PREDICTION ENGINE
+# ==========================================
+def predict_segment_delay(stop, payload) -> float:
     """
-    Predicts the probability and magnitude of delay for a single road segment.
-    Returns: { probability_pct, estimated_delay_mins, expected_delay_mins }
+    Takes the STRICTLY VALIDATED Pydantic objects from FastAPI, 
+    maps them to the exact column names the AI expects, and predicts the delay.
     """
+    if ml_pipeline is None:
+        return 0.0  # Safe fallback if AI file is missing
     
-    # Extract environmental variables
-    weather = env.get("weather_condition", "clear")
-    surface = env.get("road_surface_condition", "dry")
-    traffic = env.get("traffic_severity", "low")
-    incident = env.get("incident_reported", False)
-
-    # STEP 1: The Failsafe (For Local Testing / Hackathon MVP)
-    if not os.path.exists(MODEL_PATH):
-        # Baseline: 5% chance of a 2-minute delay
-        base_prob = 0.05
-        base_delay = 2.0
-
-        # Heuristic adjustments based on Hackathon CSV insights
-        if traffic in ["high", "congested"]:
-            base_prob += 0.40
-            base_delay += 10.0
-        if weather in ["rain", "snow"]:
-            base_prob += 0.25
-            base_delay += 8.0
-        if surface in ["icy", "snow_covered"]:
-            base_prob += 0.20
-            base_delay += 12.0
-        if incident:
-            base_prob += 0.50
-            base_delay += 25.0
+    # 1. Extract the exact 10 features the Elite Model requires
+    # Notice there is ZERO fallback math here. We trust the Pydantic schema completely.
+    model_input = {
+        'road_type': stop.road_type,
+        'vehicle_type': payload.vehicle_type,
+        'weather_condition': payload.environment_horizon.weather_condition,
+        'traffic_level': payload.environment_horizon.traffic_severity,
+        'road_incident': 1 if payload.environment_horizon.incident_reported else 0,
         
-        # Heavy vehicles suffer more on bad mountain roads
-        if road_type == "mountain" and vehicle_type in ["truck", "van"]:
-            if weather != "clear" or surface != "dry":
-                base_prob += 0.30
-                base_delay += 15.0
-
-        # Cap probability at 99%
-        final_prob = min(0.99, base_prob)
-        # E = P * D
-        expected_delay = final_prob * base_delay
-
-        return {
-            "probability_pct": round(final_prob * 100, 1),
-            "estimated_delay_mins": round(base_delay, 1),
-            "expected_delay_mins": round(expected_delay, 1)
-        }
-
-    # STEP 2: The Actual Machine Learning Inference
+        # The Critical Numeric Features
+        'temperature_c': payload.environment_horizon.temperature_c,
+        'distance_from_prev_km': stop.distance_from_prev_km,
+        'planned_travel_min': stop.planned_travel_min,
+        'stop_sequence': stop.current_order,
+        'package_weight_kg': stop.package_weight_kg
+    }
+    
+    # 2. Convert to a Pandas DataFrame (which XGBoost requires)
+    df_features = pd.DataFrame([model_input])
+    
+    # 3. Ask the AI to do the math
     try:
-        model = joblib.load(MODEL_PATH)
+        delay_prediction = ml_pipeline.predict(df_features)[0]
         
-        # (TODO: Map these text values to the integer encodings your pipeline uses)
-        features = pd.DataFrame([{
-            "road_type": road_type,
-            "vehicle_type": vehicle_type,
-            "weather": weather,
-            "traffic": traffic,
-            "incident": int(incident)
-        }])
+        # The AI might predict a negative number (early arrival). 
+        # For our lateness penalty calculations, we floor it at 0.
+        return max(0.0, float(delay_prediction))
         
-        # In a real scikit-learn pipeline, you'd use predict_proba() for probability
-        # and predict() for the magnitude. We will mock the extraction here:
-        delay_magnitude = model.predict(features)[0]
-        delay_probability = 0.85 # Mocked probability until model supports predict_proba
-        
-        expected_delay = delay_probability * delay_magnitude
-
-        return {
-            "probability_pct": round(delay_probability * 100, 1),
-            "estimated_delay_mins": round(delay_magnitude, 1),
-            "expected_delay_mins": round(expected_delay, 1)
-        }
-
     except Exception as e:
-        print(f"❌ ML Engine Error on Segment: {e}")
-        return {"probability_pct": 100.0, "estimated_delay_mins": 20.0, "expected_delay_mins": 20.0}
+        print(f"❌ AI Prediction Failed: {e}")
+        return 0.0
