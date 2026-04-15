@@ -1,59 +1,99 @@
-import joblib
-import os
+import math
+import itertools
+import json
 import pandas as pd
+import joblib
+import redis
 
-# ==========================================
-# 1. LOAD THE BRAIN (ON STARTUP)
-# ==========================================
-# Loaded OUTSIDE the function so it only hits the hard drive once when the server boots.
-MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../trained_models/xgboost_delay_model.pkl"))
+class MLEngine:
+    def __init__(self, redis_client=None):
+        # Load your trained XGBoost model into memory on startup
+        self.model = joblib.load('trained_models/xgboost_delay_model.pkl')
+        
+        # Initialize Redis connection (Fallback to localhost if not provided by main.py)
+        self.redis = redis_client or redis.Redis(host='localhost', port=6379, decode_responses=True)
 
-try:
-    ml_pipeline = joblib.load(MODEL_PATH)
-    print(f"🧠 SUCCESS: Elite XGBoost Model loaded from {MODEL_PATH}")
-except Exception as e:
-    print(f"⚠️ CRITICAL: Could not load ML model. Did you run the Jupyter Notebook? Error: {e}")
-    ml_pipeline = None
+    def _haversine_distance(self, lat1, lon1, lat2, lon2):
+        """Calculates spatial distance between two GPS coordinates in kilometers."""
+        R = 6371.0 # Earth radius in kilometers
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (math.sin(dlat / 2)**2 + 
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
 
-# ==========================================
-# 2. THE PREDICTION ENGINE
-# ==========================================
-def predict_segment_delay(stop, payload) -> float:
-    """
-    Takes the STRICTLY VALIDATED Pydantic objects from FastAPI, 
-    maps them to the exact column names the AI expects, and predicts the delay.
-    """
-    if ml_pipeline is None:
-        return 0.0  # Safe fallback if AI file is missing
-    
-    # 1. Extract the exact 10 features the Elite Model requires
-    # Notice there is ZERO fallback math here. We trust the Pydantic schema completely.
-    model_input = {
-        'road_type': stop.road_type,
-        'vehicle_type': payload.vehicle_type,
-        'weather_condition': payload.environment_horizon.weather_condition,
-        'traffic_level': payload.environment_horizon.traffic_severity,
-        'road_incident': 1 if payload.environment_horizon.incident_reported else 0,
+    def _build_adjacency_matrix(self, unvisited_stops: list) -> pd.DataFrame:
+        """Generates all N x (N-1) connections between remaining stops."""
+        matrix_data = []
         
-        # The Critical Numeric Features
-        'temperature_c': payload.environment_horizon.temperature_c,
-        'distance_from_prev_km': stop.distance_from_prev_km,
-        'planned_travel_min': stop.planned_travel_min,
-        'stop_sequence': stop.current_order,
-        'package_weight_kg': stop.package_weight_kg
-    }
-    
-    # 2. Convert to a Pandas DataFrame (which XGBoost requires)
-    df_features = pd.DataFrame([model_input])
-    
-    # 3. Ask the AI to do the math
-    try:
-        delay_prediction = ml_pipeline.predict(df_features)[0]
+        for stop_from, stop_to in itertools.permutations(unvisited_stops, 2):
+            dist = self._haversine_distance(
+                stop_from['lat'], stop_from['lon'],
+                stop_to['lat'], stop_to['lon']
+            )
+            matrix_data.append({
+                'from_stop': stop_from['stop_id'],
+                'to_stop': stop_to['stop_id'],
+                'road_type': stop_to.get('road_type', 'highway'), # Default to highway if missing
+                'distance_km': round(dist, 2)
+            })
+            
+        return pd.DataFrame(matrix_data)
+
+    def _fetch_world_state(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Fetches live weather and traffic from Redis memory with zero database lag."""
+        unique_road_types = df['road_type'].unique()
         
-        # The AI might predict a negative number (early arrival). 
-        # For our lateness penalty calculations, we floor it at 0.
-        return max(0.0, float(delay_prediction))
+        # Build keys based on the structure Node.js pushes to Redis
+        redis_keys = [f"env_state:{rt}" for rt in unique_road_types]
         
-    except Exception as e:
-        print(f"❌ AI Prediction Failed: {e}")
-        return 0.0
+        # MGET is atomic and fetches all keys in a single network trip
+        raw_states = self.redis.mget(redis_keys)
+        
+        state_map = {}
+        for rt, state_json in zip(unique_road_types, raw_states):
+            if state_json:
+                state_map[rt] = json.loads(state_json)
+            else:
+                # Fallback safeguard if Node.js hasn't populated Redis yet
+                state_map[rt] = {
+                    'weather_condition': 'clear', 
+                    'traffic_level': 'low', 
+                    'time_bucket': 'midday'
+                }
+
+        # Map the live Redis data back into our Pandas DataFrame
+        df['weather_condition'] = df['road_type'].map(lambda x: state_map[x]['weather_condition'])
+        df['traffic_level'] = df['road_type'].map(lambda x: state_map[x]['traffic_level'])
+        df['time_bucket'] = df['road_type'].map(lambda x: state_map[x]['time_bucket'])
+        
+        return df
+
+    def predict_segment_delays(self, unvisited_stops: list) -> pd.DataFrame:
+        """The main entry point. Returns a scored matrix of delay probabilities."""
+        if len(unvisited_stops) < 2:
+            return pd.DataFrame() # No routing optimization needed for 1 stop
+            
+        # 1. Build spatial connections
+        df = self._build_adjacency_matrix(unvisited_stops)
+        
+        # 2. Inject live environmental variables
+        df = self._fetch_world_state(df)
+        
+        # 3. Prepare feature matrix for XGBoost
+        # Note: XGBoost requires one-hot encoding for categorical string variables.
+        features = pd.get_dummies(df[['road_type', 'weather_condition', 'traffic_level', 'time_bucket', 'distance_km']])
+        
+        # Critical Safety Step: Ensure the DataFrame columns exactly match what the model trained on
+        # Missing categories (e.g., if there's no 'snow' right now) are filled with 0s
+        if hasattr(self.model, 'feature_names_in_'):
+            expected_cols = self.model.feature_names_in_
+            features = features.reindex(columns=expected_cols, fill_value=0)
+
+        # 4. Execute the batch prediction
+        # predict_proba returns [Probability_of_0, Probability_of_1]. We want index 1 (Delay).
+        df['delay_probability'] = self.model.predict_proba(features)[:, 1]
+        
+        # Return cleanly formatted Scored Matrix for the routing optimizer
+        return df[['from_stop', 'to_stop', 'distance_km', 'delay_probability']]
