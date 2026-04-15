@@ -1,0 +1,159 @@
+.courier-page {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #0a0a0c;
+}
+
+.map-view-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+/* LEFT SIDE: Alerts Panel (Message Box) */
+.left-alerts-panel {
+  position: absolute;
+  left: 30px;
+  bottom: 0px; /* Aligned with bottom but has padding from the stack */
+  width: 380px;
+  max-height: 70vh;
+  z-index: 100;
+  pointer-events: none; /* Allow clicks to pass through empty space */
+}
+
+.alerts-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 30px;
+  pointer-events: auto; /* Enable clicks on the cards themselves */
+  animation: slideInLeft 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideInLeft {
+  from { transform: translateX(-50px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* RIGHT SIDE: Sidebar Styling */
+.courier-sidebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 400px;
+  height: 100%;
+  background: rgba(13, 13, 17, 0.75);
+  backdrop-filter: blur(25px);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 10;
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: -10px 0 40px rgba(0, 0, 0, 0.6);
+}
+
+.sidebar-muted {
+  background: rgba(13, 13, 17, 0.9);
+}
+
+.sidebar-inner {
+  padding: 30px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 30px;
+}
+
+.action-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.action-pill:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.break-active {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #000;
+}
+
+.logout-pill {
+  flex: 0 0 110px;
+}
+
+.logout-pill:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.sidebar-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-list-area {
+  flex: 1;
+  overflow: hidden;
+}
+
+.break-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+}
+
+.break-icon {
+  font-size: 4rem;
+  margin-bottom: 20px;
+  animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.break-overlay h2 {
+  color: #fff;
+  margin-bottom: 8px;
+}
+
+.break-overlay p {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Response handling */
+@media (max-width: 1024px) {
+  .courier-sidebar {
+    width: 320px;
+  }
+}

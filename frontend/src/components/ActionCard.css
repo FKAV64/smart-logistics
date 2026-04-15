@@ -1,0 +1,164 @@
+.action-card {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(15px);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 16px;
+  margin-bottom: 16px;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.card-expanded {
+  padding: 30px;
+  transform: scale(1.02);
+  border-width: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  animation: reroute-glow 2s infinite ease-in-out;
+}
+
+@keyframes reroute-glow {
+  0%, 100% { box-shadow: 0 0 15px rgba(245, 158, 11, 0.2); }
+  50% { box-shadow: 0 0 30px rgba(245, 158, 11, 0.5); }
+}
+
+.card-expanded .reason-text {
+  font-size: 1.1rem;
+  font-weight: 500;
+  margin-bottom: 20px;
+}
+
+/* Status Colors & Glowing Borders */
+.status-on-time {
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.status-on-time .severity-badge { background: #10b981; color: #fff; }
+
+.status-reroute {
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+.status-reroute .severity-badge { background: #f59e0b; color: #000; }
+
+.status-critical {
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.4);
+  animation: critical-pulse 2s infinite;
+}
+.status-critical .severity-badge { background: #ef4444; color: #fff; }
+
+.status-info {
+  box-shadow: 0 0 15px rgba(236, 72, 153, 0.2);
+  border-color: rgba(236, 72, 153, 0.3);
+}
+.status-info .severity-badge { background: #ec4899; color: #fff; }
+
+@keyframes critical-pulse {
+  0% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.5); }
+  100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.vehicle-id {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.severity-badge {
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 4px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.5px;
+}
+
+.card-body .reason-text {
+  font-size: 0.9rem;
+  color: #fff;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.impact-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.impact-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.constraint-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 8px;
+  border-radius: 8px;
+  color: #ef4444;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.card-footer {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+  width: 100%;
+}
+
+.btn-primary { background: #3b82f6; color: #fff; }
+.btn-primary:not(:disabled):hover { background: #2563eb; }
+
+.btn-danger { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+.btn-danger:not(:disabled):hover { background: rgba(239, 68, 68, 0.25); }
+
+.btn-warning { background: #f59e0b; color: #000; }
+.btn-success { background: #10b981; color: #fff; }
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spin {
+  animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
