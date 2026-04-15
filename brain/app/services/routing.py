@@ -1,132 +1,127 @@
-import math
-from typing import List, Dict
+import copy
+import random
 from datetime import datetime, timedelta
-from app.services.ml_engine import predict_segment_delay
+import pandas as pd
 
-def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Euclidean distance fallback."""
-    return math.sqrt((lat2 - lat1)**2 + (lon2 - lon1)**2)
+class RouteOptimizer:
+    def __init__(self, base_speed_kmh=40.0):
+        # We assume an average city speed for pure transit, AI handles the rest
+        self.base_speed_kmh = base_speed_kmh
 
-def build_time_matrix(all_nodes: List[Dict], vehicle_type: str, env_horizon: dict) -> List[List[float]]:
-    """
-    Builds an ephemeral (dynamic) matrix of travel times between all nodes.
-    Base Time + ML Expected Delay = Total Segment Time.
-    """
-    n = len(all_nodes)
-    time_matrix = [[0.0] * n for _ in range(n)]
-    
-    for i in range(n):
-        for j in range(n):
-            if i != j:
-                # 1. Calculate physical distance
-                distance = calculate_distance(
-                    all_nodes[i]["lat"], all_nodes[i]["lon"],
-                    all_nodes[j]["lat"], all_nodes[j]["lon"]
-                )
-                
-                # Baseline travel time heuristic (1 degree ~ 200 mins)
-                base_time_mins = distance * 200 
-                
-                # 2. Get the road type for the destination node
-                # (Node 0 is the current location, which has no incoming road type)
-                road_type = all_nodes[j].get("road_type", "urban") if j != 0 else "urban"
-                
-                # 3. Ask the ML Engine for the expected delay on this specific segment
-                ml_prediction = predict_segment_delay(road_type, vehicle_type, env_horizon)
-                expected_delay = ml_prediction["expected_delay_mins"]
-                
-                # 4. Total Expected Time for this segment
-                time_matrix[i][j] = base_time_mins + expected_delay
-                
-    return time_matrix
-
-def calculate_route_cost(route_indices: List[int], time_matrix: List[List[float]], all_nodes: List[Dict], start_time: datetime) -> float:
-    """Calculates cost based purely on Time Matrix + Time Window Penalties."""
-    total_cost_mins = 0.0
-    current_time = start_time
-
-    for i in range(len(route_indices) - 1):
-        from_idx = route_indices[i]
-        to_idx = route_indices[i+1]
-        
-        # 1. Add the ML-Adjusted Travel Time
-        travel_minutes = time_matrix[from_idx][to_idx]
-        total_cost_mins += travel_minutes
-        current_time += timedelta(minutes=travel_minutes)
-        
-        target_node = all_nodes[to_idx]
-        
-        # 2. Time Window Logic
-        if to_idx != 0 and "window_start" in target_node:
-            window_start = datetime.fromisoformat(target_node["window_start"].replace('Z', '+00:00'))
-            window_end = datetime.fromisoformat(target_node["window_end"].replace('Z', '+00:00'))
+    def _build_fast_lookup(self, scored_matrix: pd.DataFrame) -> dict:
+        """
+        Converts the Pandas Scored Matrix into an O(1) dictionary lookup.
+        Applies pure AI-Predicted Delay Minutes directly to the base travel time.
+        """
+        lookup = {}
+        for _, row in scored_matrix.iterrows():
+            # Standard travel time (perfect conditions)
+            base_time_min = (row['distance_km'] / self.base_speed_kmh) * 60.0
             
-            if current_time < window_start:
-                # Wait for window to open
-                current_time = window_start
-            elif current_time > window_end:
-                # Severe Penalty: 10x multiplier for every minute late
-                late_minutes = (current_time - window_end).total_seconds() / 60.0
-                total_cost_mins += (late_minutes * 10.0) 
-                
-        # 3. Add 5 minutes for package drop-off
-        current_time += timedelta(minutes=5)
+            # The exact penalty predicted by your Scikit-Learn Pipeline
+            predicted_delay = row['predicted_delay_min']
+            
+            # Pure routing logic: ETA = Base + Delay
+            adjusted_time_min = base_time_min + predicted_delay
+            
+            lookup[(row['from_stop'], row['to_stop'])] = {
+                'travel_time': adjusted_time_min,
+                'predicted_delay': predicted_delay
+            }
+        return lookup
+
+    def _evaluate_sequence(self, sequence: list, lookup: dict, start_time: datetime):
+        """
+        Calculates the total time of a specific sequence of stops.
+        Applies massive penalties if a delivery window is missed.
+        """
+        current_time = start_time
+        total_cost_minutes = 0
+        max_delay_encountered = 0.0
         
-    return total_cost_mins
-
-def two_opt_with_windows(initial_route: List[int], time_matrix: List[List[float]], all_nodes: List[Dict], start_time: datetime) -> List[int]:
-    """2-opt local search utilizing the ML Time Matrix."""
-    best_route = initial_route[:]
-    best_cost = calculate_route_cost(best_route, time_matrix, all_nodes, start_time)
-    improvement = True
-    
-    while improvement:
-        improvement = False
-        for i in range(1, len(best_route) - 1):
-            for j in range(i + 1, len(best_route)):
-                new_route = best_route[:i] + best_route[i:j+1][::-1] + best_route[j+1:]
-                new_cost = calculate_route_cost(new_route, time_matrix, all_nodes, start_time)
+        for i in range(len(sequence) - 1):
+            from_stop = sequence[i]
+            to_stop = sequence[i+1]
+            
+            # Fetch AI-adjusted travel time from our fast lookup matrix
+            edge = lookup.get((from_stop['stop_id'], to_stop['stop_id']))
+            if not edge:
+                return float('inf'), 0.0 # Invalid sequence (missing matrix data)
                 
-                if new_cost < best_cost:
-                    best_cost = new_cost
-                    best_route = new_route
-                    improvement = True
-                    
-    return best_route
+            travel_time = edge['travel_time']
+            max_delay_encountered = max(max_delay_encountered, edge['predicted_delay'])
+            
+            # Drive to the next stop
+            current_time += timedelta(minutes=travel_time)
+            total_cost_minutes += travel_time
+            
+            # Parse Time Windows
+            window_start = datetime.fromisoformat(to_stop['window_start'].replace('Z', '+00:00'))
+            window_end = datetime.fromisoformat(to_stop['window_end'].replace('Z', '+00:00'))
+            
+            # HARD CONSTRAINT: Did we arrive too late?
+            if current_time > window_end:
+                total_cost_minutes += 10000  # Massive penalty to discard this route
+                
+            # CONSTRAINT: Did we arrive too early?
+            if current_time < window_start:
+                wait_time = (window_start - current_time).total_seconds() / 60.0
+                current_time = window_start # Fast-forward to when the window opens
+                total_cost_minutes += wait_time
+                
+            # Add time spent physically dropping off the package
+            service_min = to_stop.get('planned_service_min', 5.0)
+            current_time += timedelta(minutes=service_min)
+            
+        return total_cost_minutes, max_delay_encountered
 
-def optimize_route(current_location: dict, unvisited_stops: List[dict], vehicle_type: str, env_horizon: dict) -> dict:
-    """
-    Entry point for the Nav Engine.
-    Builds the ML Time Matrix and runs the time-aware 2-opt.
-    """
-    print(f"🗺️ Nav Engine: Generating Spatio-Temporal Matrix for {len(unvisited_stops)} segments...")
-    
-    if not unvisited_stops:
-        return {"new_sequence": [], "time_saved_minutes": 0, "total_route_time": 0}
+    def optimize_route(self, unvisited_stops: list, scored_matrix: pd.DataFrame, current_time_iso: str):
+        """
+        The Main Entry Point.
+        Takes unvisited stops and the ML Scored Matrix, returns reordered stops and Dispatcher UI Insights.
+        """
+        if len(unvisited_stops) <= 1:
+            return {
+                "optimized_stops": unvisited_stops,
+                "dispatcher_insight": "Only one stop remaining. Proceed as planned."
+            }
+            
+        start_time = datetime.fromisoformat(current_time_iso.replace('Z', '+00:00'))
+        lookup = self._build_fast_lookup(scored_matrix)
+        
+        # Hill-Climbing algorithm
+        best_sequence = copy.deepcopy(unvisited_stops)
+        best_cost, best_delay = self._evaluate_sequence(best_sequence, lookup, start_time)
+        
+        iterations = 1000 
+        for _ in range(iterations):
+            new_seq = copy.deepcopy(best_sequence)
+            
+            # Randomly swap two stops to test a new combination
+            idx1, idx2 = random.sample(range(len(new_seq)), 2)
+            new_seq[idx1], new_seq[idx2] = new_seq[idx2], new_seq[idx1]
+            
+            new_cost, new_delay = self._evaluate_sequence(new_seq, lookup, start_time)
+            
+            if new_cost < best_cost:
+                best_cost = new_cost
+                best_sequence = new_seq
+                best_delay = new_delay
 
-    all_nodes = [current_location] + unvisited_stops
-    n = len(all_nodes)
-    
-    # 1. Build the ML-Adjusted Time Matrix (Dynamic Horizon)
-    time_matrix = build_time_matrix(all_nodes, vehicle_type, env_horizon)
-    
-    # 2. Establish "Now"
-    start_time = datetime.fromisoformat(current_location["timestamp"].replace('Z', '+00:00'))
-    
-    # 3. Run the Algorithm
-    initial_route = list(range(n))
-    best_route_indices = two_opt_with_windows(initial_route, time_matrix, all_nodes, start_time)
-    
-    optimized_sequence = [all_nodes[idx]["stop_id"] for idx in best_route_indices[1:]]
-    
-    # Get final simulated cost of the new route to pass back to the dispatcher logic
-    final_cost = calculate_route_cost(best_route_indices, time_matrix, all_nodes, start_time)
-    
-    return {
-        "new_sequence": optimized_sequence,
-        "impact": {
-            "time_saved_minutes": 0, # Will be calculated by the Dispatcher delta logic
-            "route_health": "STABLE"
-        },
-        "_debug_final_cost": final_cost # Useful for internal worker logic
-    }
+        # Reassign sequence numbers
+        for index, stop in enumerate(best_sequence):
+            stop['current_order'] = index + 1
+
+        # Check if the AI actually changed the route to generate the UI Insight
+        original_ids = [s['stop_id'] for s in unvisited_stops]
+        new_ids = [s['stop_id'] for s in best_sequence]
+        
+        if original_ids == new_ids:
+            insight = "Route is optimal. AI confirms no major threats on current path."
+        else:
+            insight = f"AI Reorder Suggested: Optimized to avoid up to {int(best_delay)} minutes of predicted delay while protecting time windows."
+            
+        return {
+            "optimized_stops": best_sequence,
+            "dispatcher_insight": insight
+        }

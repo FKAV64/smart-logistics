@@ -1,128 +1,105 @@
-import copy
-import random
-from datetime import datetime, timedelta
-import pandas as pd
+import json
+import redis
+import traceback
+from datetime import datetime
 
-class RouteOptimizer:
-    def __init__(self, base_speed_kmh=40.0):
-        # We assume an average city speed, but the ML model will adjust this dynamically
-        self.base_speed_kmh = base_speed_kmh
+# Import the core Brain components
+from app.services.ml_engine import MLEngine
+from app.services.routing import RouteOptimizer
 
-    def _build_fast_lookup(self, scored_matrix: pd.DataFrame) -> dict:
-        """
-        Converts the Pandas Scored Matrix into an O(1) dictionary lookup.
-        Applies the AI delay probability as a time penalty.
-        """
-        lookup = {}
-        for _, row in scored_matrix.iterrows():
-            # Calculate base travel time in minutes based on distance
-            base_time_min = (row['distance_km'] / self.base_speed_kmh) * 60.0
-            
-            # INJECT AI LOGIC: Inflate travel time if delay probability is high.
-            # Example: A 10-minute drive with 80% delay probability becomes 10 * (1 + 0.8) = 18 minutes.
-            delay_factor = 1.0 + row['delay_probability']
-            adjusted_time_min = base_time_min * delay_factor
-            
-            lookup[(row['from_stop'], row['to_stop'])] = {
-                'travel_time': adjusted_time_min,
-                'delay_prob': row['delay_probability']
-            }
-        return lookup
-
-    def _evaluate_sequence(self, sequence: list, lookup: dict, start_time: datetime):
-        """
-        Calculates the total time of a specific sequence of stops.
-        Applies massive penalties if a delivery window is missed.
-        """
-        current_time = start_time
-        total_cost_minutes = 0
-        max_ai_risk_encountered = 0.0
+class RedisWorker:
+    def __init__(self, host='redis', port=6379):
+        """Initializes the connection to Redis and loads the AI models into memory."""
+        print("Initializing Gatekeeper and connecting to Redis...")
+        self.redis = redis.Redis(host=host, port=port, decode_responses=True)
+        self.pubsub = self.redis.pubsub()
         
-        for i in range(len(sequence) - 1):
-            from_stop = sequence[i]
-            to_stop = sequence[i+1]
-            
-            # Fetch AI-adjusted travel time from our fast lookup matrix
-            edge = lookup.get((from_stop['stop_id'], to_stop['stop_id']))
-            if not edge:
-                return float('inf'), 1.0 # Invalid sequence (missing matrix data)
-                
-            travel_time = edge['travel_time']
-            max_ai_risk_encountered = max(max_ai_risk_encountered, edge['delay_prob'])
-            
-            # Drive to the next stop
-            current_time += timedelta(minutes=travel_time)
-            total_cost_minutes += travel_time
-            
-            # Parse Time Windows (Handling standard ISO 8601 strings)
-            window_start = datetime.fromisoformat(to_stop['window_start'].replace('Z', '+00:00'))
-            window_end = datetime.fromisoformat(to_stop['window_end'].replace('Z', '+00:00'))
-            
-            # HARD CONSTRAINT: Did we arrive too late?
-            if current_time > window_end:
-                total_cost_minutes += 10000  # Massive penalty to discard this route
-                
-            # CONSTRAINT: Did we arrive too early?
-            if current_time < window_start:
-                wait_time = (window_start - current_time).total_seconds() / 60.0
-                current_time = window_start # Fast-forward to when the window opens
-                total_cost_minutes += wait_time
-                
-            # Add time spent physically dropping off the package
-            service_min = to_stop.get('planned_service_min', 5.0)
-            current_time += timedelta(minutes=service_min)
-            
-        return total_cost_minutes, max_ai_risk_encountered
+        self.listen_channel = 'traffic_alerts_channel'
+        self.publish_channel = 'route_optimizations_channel'
+        
+        print("Loading ML Pipeline and Routing Engine...")
+        self.ml_engine = MLEngine(redis_client=self.redis)
+        self.route_optimizer = RouteOptimizer(base_speed_kmh=40.0)
+        print("✅ Python Brain Worker is Ready and Armed.")
 
-    def optimize_route(self, unvisited_stops: list, scored_matrix: pd.DataFrame, current_time_iso: str):
+    def _acquire_lock(self, route_id: str) -> bool:
         """
-        The Main Entry Point.
-        Takes unvisited stops and the ML Scored Matrix, returns reordered stops and Dispatcher UI Insights.
+        Atomic Lock (Debouncer). 
+        Ensures if Node.js sends 5 quick webhooks for the same truck, we only optimize it once.
         """
-        # Rule 1: We never reduce stops. If there's only 1 left, return it immediately.
-        if len(unvisited_stops) <= 1:
-            return {
-                "optimized_stops": unvisited_stops,
-                "dispatcher_insight": "Only one stop remaining. Proceed as planned."
+        lock_key = f"lock:optimize:{route_id}"
+        # SETNX sets the key only if it does not exist. Expires in 10 seconds.
+        return self.redis.set(lock_key, "locked", nx=True, ex=10)
+
+    def process_message(self, message_data: dict):
+        """The main orchestration pipeline for incoming Node.js payloads."""
+        
+        # 1. Filter out PING events to save compute
+        if message_data.get('type') == 'PING':
+            return
+        
+        route_id = message_data.get('route_id')
+        if not route_id:
+            return
+
+        # 2. Check Atomic Lock
+        if not self._acquire_lock(route_id):
+            print(f"⚠️  Skipping duplicate request for Route {route_id} (Debounced)")
+            return
+
+        print(f"🚀 Optimizing Route: {route_id}...")
+        
+        try:
+            unvisited_stops = message_data.get('unvisited_stops', [])
+            # Fallback to current UTC time if Node.js forgets to send it
+            current_time_iso = message_data.get('current_time_iso', datetime.utcnow().isoformat() + "Z")
+
+            # STEP 1: AI Segment Prediction (Math + World State + XGBoost)
+            scored_matrix = self.ml_engine.predict_segment_delays(unvisited_stops)
+            
+            if scored_matrix.empty:
+                print(f"✅ Route {route_id} has < 2 stops. No optimization needed.")
+                return
+
+            # STEP 2: Algorithmic Reordering (Time Windows + EV Cost)
+            result = self.route_optimizer.optimize_route(
+                unvisited_stops=unvisited_stops,
+                scored_matrix=scored_matrix,
+                current_time_iso=current_time_iso
+            )
+
+            # STEP 3: Package result and fire it back to Node.js
+            response_payload = {
+                "route_id": route_id,
+                "courier_id": message_data.get("courier_id"),
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "optimized_stops": result["optimized_stops"],
+                "dispatcher_insight": result["dispatcher_insight"]
             }
             
-        start_time = datetime.fromisoformat(current_time_iso.replace('Z', '+00:00'))
-        lookup = self._build_fast_lookup(scored_matrix)
-        
-        # We use a Hill-Climbing algorithm. It's blazing fast and excellent for < 20 stops.
-        best_sequence = copy.deepcopy(unvisited_stops)
-        best_cost, best_risk = self._evaluate_sequence(best_sequence, lookup, start_time)
-        
-        iterations = 1000 # Enough to optimize, fast enough to never lag Node.js
-        for _ in range(iterations):
-            new_seq = copy.deepcopy(best_sequence)
-            
-            # Randomly swap two stops to test a new combination
-            idx1, idx2 = random.sample(range(len(new_seq)), 2)
-            new_seq[idx1], new_seq[idx2] = new_seq[idx2], new_seq[idx1]
-            
-            new_cost, new_risk = self._evaluate_sequence(new_seq, lookup, start_time)
-            
-            # If the new combination is faster and obeys time windows, adopt it
-            if new_cost < best_cost:
-                best_cost = new_cost
-                best_sequence = new_seq
-                best_risk = new_risk
+            self.redis.publish(self.publish_channel, json.dumps(response_payload))
+            print(f"✅ Successfully published optimized route back to Node.js for {route_id}")
 
-        # Reassign sequence numbers based on the new order
-        for index, stop in enumerate(best_sequence):
-            stop['current_order'] = index + 1
+        except Exception as e:
+            print(f"❌ Error processing route {route_id}: {str(e)}")
+            traceback.print_exc()
 
-        # Check if the AI actually changed the route to generate the UI Insight
-        original_ids = [s['stop_id'] for s in unvisited_stops]
-        new_ids = [s['stop_id'] for s in best_sequence]
+    def listen(self):
+        """Blocking loop that listens indefinitely to the Pub/Sub channel."""
+        self.pubsub.subscribe(self.listen_channel)
+        print(f"🎧 Listening for events on '{self.listen_channel}'...")
         
-        if original_ids == new_ids:
-            insight = "Route is optimal. AI confirms no major weather/traffic threats on current path."
-        else:
-            insight = f"AI Reorder Suggested: Optimized to avoid a {int(best_risk*100)}% risk of delay while protecting time windows."
-            
-        return {
-            "optimized_stops": best_sequence,
-            "dispatcher_insight": insight
-        }
+        for message in self.pubsub.listen():
+            if message['type'] == 'message':
+                try:
+                    data = json.loads(message['data'])
+                    self.process_message(data)
+                except json.JSONDecodeError:
+                    print("❌ Received invalid JSON payload from Node.js.")
+                except Exception as e:
+                    print(f"❌ Worker critical exception: {str(e)}")
+
+if __name__ == "__main__":
+    # If running locally without Docker, use localhost. Inside Docker, 'redis' hostname resolves.
+    worker = RedisWorker(host='localhost', port=6379)
+    worker.listen()
