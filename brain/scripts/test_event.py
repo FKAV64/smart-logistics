@@ -1,62 +1,96 @@
 import redis
 import json
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
-r = redis.Redis(host='localhost', port=6379, db=0)
+def run_test():
+    print("🔌 Connecting to Redis...")
+    # Use localhost if running outside Docker, or 'redis' if running inside the network
+    try:
+        r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+        r.ping()
+    except redis.ConnectionError:
+        print("❌ Cannot connect to Redis on localhost:6379. Is Docker running?")
+        return
 
-now = datetime.now(timezone.utc)
-plenty_of_time = (now + timedelta(hours=4)).isoformat()
-urgent_time = (now + timedelta(minutes=15)).isoformat()
-now_iso = now.isoformat()
+    # ==========================================
+    # 1. SEED THE WORLD STATE (Mocking Node.js)
+    # ==========================================
+    print("🌍 Seeding Live Weather and Traffic into Redis...")
+    
+    mountain_state = {
+        "weather_condition": "snow", 
+        "traffic_level": "congested", 
+        "time_bucket": "midday"
+    }
+    highway_state = {
+        "weather_condition": "clear", 
+        "traffic_level": "low", 
+        "time_bucket": "midday"
+    }
+    
+    r.set("env_state:mountain", json.dumps(mountain_state))
+    r.set("env_state:highway", json.dumps(highway_state))
 
-def create_payload(route_id, status, weather, traffic, incident, stops):
-    return {
-        "event_type": "TRAFFIC_ALERT",
-        "route_id": route_id,
-        "courier_id": f"DR-{route_id}",
-        "shift_end": "18:00:00",
-        "courier_status": status,
-        "vehicle_type": "van",
-        "current_location": {"lat": 39.620, "lon": 37.051, "timestamp": now_iso},
-        "environment_horizon": {
-            "weather_condition": weather,
-            "road_surface_condition": "wet" if weather == "rain" else ("icy" if weather == "snow" else "dry"),
-            "traffic_severity": traffic,
-            "time_bucket": "midday",
-            "incident_reported": incident
-        },
-        "unvisited_stops": stops
+    # ==========================================
+    # 2. BUILD THE COURIER PAYLOAD
+    # ==========================================
+    now = datetime.utcnow()
+    
+    payload = {
+        "type": "COURIER_EVENT",
+        "route_id": "RT-WINTER-TEST",
+        "courier_id": "DRV-884",
+        "current_time_iso": now.isoformat() + "Z",
+        "unvisited_stops": [
+            {
+                "stop_id": "STP-A",
+                "lat": 39.7743, # Mountain coordinates
+                "lon": 37.0019,
+                "road_type": "mountain",
+                # Window closes in 60 minutes
+                "window_start": (now + timedelta(minutes=10)).isoformat() + "Z",
+                "window_end": (now + timedelta(minutes=60)).isoformat() + "Z",
+                "planned_service_min": 5.0
+            },
+            {
+                "stop_id": "STP-B",
+                "lat": 39.8021, # Highway coordinates
+                "lon": 37.1554,
+                "road_type": "highway",
+                # Window closes in 45 minutes (Tighter window!)
+                "window_start": (now + timedelta(minutes=15)).isoformat() + "Z",
+                "window_end": (now + timedelta(minutes=45)).isoformat() + "Z",
+                "planned_service_min": 5.0
+            }
+        ]
     }
 
-# --- SCENARIO 1: CONTINUE ---
-# Clear weather, low traffic. Sequence is fine.
-stops_standard = [
-    {"stop_id": "STP-A", "lat": 39.625, "lon": 37.055, "window_start": now_iso, "window_end": plenty_of_time, "current_order": 1, "road_type": "urban"},
-    {"stop_id": "STP-B", "lat": 39.630, "lon": 37.060, "window_start": now_iso, "window_end": plenty_of_time, "current_order": 2, "road_type": "urban"}
-]
-print("\n🟢 SCENARIO 1: Perfect Conditions")
-r.publish("traffic_alerts_channel", json.dumps(create_payload("TRK-1-CONT", "EN_ROUTE", "clear", "low", False, stops_standard)))
-time.sleep(1)
+    # ==========================================
+    # 3. SET UP THE LISTENER AND FIRE
+    # ==========================================
+    pubsub = r.pubsub()
+    pubsub.subscribe('route_optimizations_channel')
+    
+    print("🚀 Firing payload to traffic_alerts_channel...")
+    r.publish('traffic_alerts_channel', json.dumps(payload))
+    
+    print("🎧 Listening for AI Brain response...\n")
+    
+    # Wait for the response
+    timeout = time.time() + 5.0 # 5 second timeout
+    while time.time() < timeout:
+        message = pubsub.get_message(ignore_subscribe_messages=True)
+        if message and message['type'] == 'message':
+            print("==========================================")
+            print("🧠 AI OPTIMIZER RESPONSE RECEIVED:")
+            print("==========================================")
+            response_data = json.loads(message['data'])
+            print(json.dumps(response_data, indent=2))
+            return
+        time.sleep(0.1)
+        
+    print("❌ Timed out waiting for response. Is redis_worker.py running?")
 
-# --- SCENARIO 2: DELAY_DEPARTURE ---
-# Extreme danger, but the driver is still parked at the depot (AT_STOP).
-print("\n🟡 SCENARIO 2: Blizzard, Driver at Depot")
-r.publish("traffic_alerts_channel", json.dumps(create_payload("TRK-2-HOLD", "AT_STOP", "snow", "high", True, stops_standard)))
-time.sleep(1)
-
-# --- SCENARIO 3: REQUEST_ALTERNATE_PATH ---
-# Extreme danger, but the driver is already driving on the highway (EN_ROUTE).
-print("\n🟠 SCENARIO 3: Blizzard, Driver already on the road")
-r.publish("traffic_alerts_channel", json.dumps(create_payload("TRK-3-ALT", "EN_ROUTE", "snow", "high", True, stops_standard)))
-time.sleep(1)
-
-# --- SCENARIO 4: RE-ROUTE ---
-# Stop B is far away but closes in 15 minutes! Stop A is close but closes in 4 hours. 
-# The engine must swap them to save the time window penalty.
-stops_urgent = [
-    {"stop_id": "STP-A", "lat": 39.625, "lon": 37.055, "window_start": now_iso, "window_end": plenty_of_time, "current_order": 1, "road_type": "urban"},
-    {"stop_id": "STP-B", "lat": 39.640, "lon": 37.080, "window_start": now_iso, "window_end": urgent_time, "current_order": 2, "road_type": "urban"}
-]
-print("\n🔴 SCENARIO 4: Time Window Emergency")
-r.publish("traffic_alerts_channel", json.dumps(create_payload("TRK-4-REROUTE", "EN_ROUTE", "clear", "low", False, stops_urgent)))
+if __name__ == "__main__":
+    run_test()

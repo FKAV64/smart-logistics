@@ -76,52 +76,52 @@ class RouteOptimizer:
         return total_cost_minutes, max_delay_encountered
 
     def optimize_route(self, unvisited_stops: list, scored_matrix: pd.DataFrame, current_time_iso: str):
-        """
-        The Main Entry Point.
-        Takes unvisited stops and the ML Scored Matrix, returns reordered stops and Dispatcher UI Insights.
-        """
-        if len(unvisited_stops) <= 1:
+            if len(unvisited_stops) <= 1:
+                return {
+                    "action_type": "CONTINUE",
+                    "new_sequence_ids": [s['stop_id'] for s in unvisited_stops],
+                    "time_saved": 0,
+                    "max_delay": 0,
+                    "health": "OPTIMAL"
+                }
+                
+            start_time = datetime.fromisoformat(current_time_iso.replace('Z', '+00:00'))
+            lookup = self._build_fast_lookup(scored_matrix)
+            
+            # Original sequence evaluation
+            original_sequence = copy.deepcopy(unvisited_stops)
+            original_cost, original_delay = self._evaluate_sequence(original_sequence, lookup, start_time)
+            
+            # Hill-Climbing Optimization
+            best_sequence = copy.deepcopy(original_sequence)
+            best_cost = original_cost
+            best_delay = original_delay
+            
+            for _ in range(1000):
+                new_seq = copy.deepcopy(best_sequence)
+                idx1, idx2 = random.sample(range(len(new_seq)), 2)
+                new_seq[idx1], new_seq[idx2] = new_seq[idx2], new_seq[idx1]
+                new_cost, new_delay = self._evaluate_sequence(new_seq, lookup, start_time)
+                
+                if new_cost < best_cost:
+                    best_cost = new_cost
+                    best_sequence = new_seq
+                    best_delay = new_delay
+
+            # Calculate performance deltas
+            time_saved = max(0, original_cost - best_cost)
+            # Sequence changed? 
+            is_reordered = [s['stop_id'] for s in original_sequence] != [s['stop_id'] for s in best_sequence]
+            
+            # Map route health based on window penalties [cite: 99]
+            health = "OPTIMAL"
+            if best_cost >= 10000: health = "FAILED"
+            elif best_delay > 15: health = "AT_RISK"
+
             return {
-                "optimized_stops": unvisited_stops,
-                "dispatcher_insight": "Only one stop remaining. Proceed as planned."
+                "is_reordered": is_reordered,
+                "new_sequence_ids": [s['stop_id'] for s in best_sequence],
+                "time_saved": int(time_saved),
+                "max_delay": int(best_delay),
+                "health": health
             }
-            
-        start_time = datetime.fromisoformat(current_time_iso.replace('Z', '+00:00'))
-        lookup = self._build_fast_lookup(scored_matrix)
-        
-        # Hill-Climbing algorithm
-        best_sequence = copy.deepcopy(unvisited_stops)
-        best_cost, best_delay = self._evaluate_sequence(best_sequence, lookup, start_time)
-        
-        iterations = 1000 
-        for _ in range(iterations):
-            new_seq = copy.deepcopy(best_sequence)
-            
-            # Randomly swap two stops to test a new combination
-            idx1, idx2 = random.sample(range(len(new_seq)), 2)
-            new_seq[idx1], new_seq[idx2] = new_seq[idx2], new_seq[idx1]
-            
-            new_cost, new_delay = self._evaluate_sequence(new_seq, lookup, start_time)
-            
-            if new_cost < best_cost:
-                best_cost = new_cost
-                best_sequence = new_seq
-                best_delay = new_delay
-
-        # Reassign sequence numbers
-        for index, stop in enumerate(best_sequence):
-            stop['current_order'] = index + 1
-
-        # Check if the AI actually changed the route to generate the UI Insight
-        original_ids = [s['stop_id'] for s in unvisited_stops]
-        new_ids = [s['stop_id'] for s in best_sequence]
-        
-        if original_ids == new_ids:
-            insight = "Route is optimal. AI confirms no major threats on current path."
-        else:
-            insight = f"AI Reorder Suggested: Optimized to avoid up to {int(best_delay)} minutes of predicted delay while protecting time windows."
-            
-        return {
-            "optimized_stops": best_sequence,
-            "dispatcher_insight": insight
-        }

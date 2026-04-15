@@ -31,57 +31,64 @@ class RedisWorker:
         # SETNX sets the key only if it does not exist. Expires in 10 seconds.
         return self.redis.set(lock_key, "locked", nx=True, ex=10)
 
+    # brain/app/services/redis_worker.py
+
     def process_message(self, message_data: dict):
-        """The main orchestration pipeline for incoming Node.js payloads."""
-        
-        # 1. Filter out PING events to save compute
-        if message_data.get('type') == 'PING':
-            return
+        if message_data.get('type') == 'PING': return # [cite: 14]
         
         route_id = message_data.get('route_id')
-        if not route_id:
-            return
+        if not route_id or not self._acquire_lock(route_id): return # [cite: 15]
 
-        # 2. Check Atomic Lock
-        if not self._acquire_lock(route_id):
-            print(f"⚠️  Skipping duplicate request for Route {route_id} (Debounced)")
-            return
-
-        print(f"🚀 Optimizing Route: {route_id}...")
-        
         try:
             unvisited_stops = message_data.get('unvisited_stops', [])
-            # Fallback to current UTC time if Node.js forgets to send it
+            courier_status = message_data.get('courier_status', 'EN_ROUTE') # [cite: 45]
             current_time_iso = message_data.get('current_time_iso', datetime.utcnow().isoformat() + "Z")
 
-            # STEP 1: AI Segment Prediction (MODIFIED: Pass full message_data for pipeline features)
             scored_matrix = self.ml_engine.predict_segment_delays(message_data)
-            
-            if scored_matrix.empty:
-                print(f"✅ Route {route_id} has < 2 stops. No optimization needed.")
-                return
+            if scored_matrix.empty: return
 
-            # STEP 2: Algorithmic Reordering (Time Windows + EV Cost)
-            result = self.route_optimizer.optimize_route(
-                unvisited_stops=unvisited_stops,
-                scored_matrix=scored_matrix,
-                current_time_iso=current_time_iso
-            )
+            # Get optimization results
+            res = self.route_optimizer.optimize_route(unvisited_stops, scored_matrix, current_time_iso)
 
-            # STEP 3: Package result and fire it back to Node.js
+            # Logic to determine action_type [cite: 27-34]
+            action = "CONTINUE"
+            reason = "Current sequence is mathematically optimal."
+            severity = "low"
+
+            if res["is_reordered"]: # [cite: 33]
+                action = "RE-ROUTE"
+                reason = f"Re-ordering stops saves {res['time_saved']} minutes and protects time windows."
+                severity = "high"
+            elif res["max_delay"] > 15:
+                severity = "medium"
+                if courier_status == "AT_STOP": # [cite: 29]
+                    action = "DELAY_DEPARTURE"
+                    reason = f"Current order optimal, but heavy traffic imminent. Suggest waiting 15 mins."
+                else: # [cite: 31]
+                    action = "REQUEST_ALTERNATE_PATH"
+                    reason = f"{res['max_delay']}m delay predicted on current path. Requesting physical detour."
+
+            # Construct final structure exactly as per Documentation [cite: 89-102]
             response_payload = {
                 "route_id": route_id,
-                "courier_id": message_data.get("courier_id"),
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-                "optimized_stops": result["optimized_stops"],
-                "dispatcher_insight": result["dispatcher_insight"]
+                "status": "OPTIMIZED", # [cite: 91]
+                "ai_recommendation": {
+                    "action_type": action, # [cite: 93]
+                    "severity": severity, # [cite: 94]
+                    "reason": reason, # [cite: 95]
+                    "new_sequence": res["new_sequence_ids"], # [cite: 96]
+                    "impact": { # [cite: 97]
+                        "time_saved_minutes": res["time_saved"], # [cite: 98]
+                        "route_health": res["health"] # [cite: 99]
+                    }
+                }
             }
             
             self.redis.publish(self.publish_channel, json.dumps(response_payload))
-            print(f"✅ Successfully published optimized route back to Node.js for {route_id}")
+            print(f"✅ Published {action} for {route_id}")
 
         except Exception as e:
-            print(f"❌ Error processing route {route_id}: {str(e)}")
+            print(f"❌ Error: {str(e)}")
             traceback.print_exc()
 
     def listen(self):
