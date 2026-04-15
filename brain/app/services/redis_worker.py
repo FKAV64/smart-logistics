@@ -54,8 +54,8 @@ class RedisWorker:
             # Fallback to current UTC time if Node.js forgets to send it
             current_time_iso = message_data.get('current_time_iso', datetime.utcnow().isoformat() + "Z")
 
-            # STEP 1: AI Segment Prediction (Math + World State + XGBoost)
-            scored_matrix = self.ml_engine.predict_segment_delays(unvisited_stops)
+            # STEP 1: AI Segment Prediction (MODIFIED: Pass full message_data for pipeline features)
+            scored_matrix = self.ml_engine.predict_segment_delays(message_data)
             
             if scored_matrix.empty:
                 print(f"✅ Route {route_id} has < 2 stops. No optimization needed.")
@@ -99,7 +99,19 @@ class RedisWorker:
                 except Exception as e:
                     print(f"❌ Worker critical exception: {str(e)}")
 
+# --- Helper for main.py background tasking ---
+
+def start_redis_listener():
+    """Helper function to allow main.py to spawn the worker as a background task."""
+    print("Background Task: Spinning up Redis Gatekeeper...")
+    try:
+        # Use localhost for local dev. If inside Docker, this might need to be 'redis'
+        worker = RedisWorker(host='localhost', port=6379) 
+        worker.listen()
+    except Exception as e:
+        print(f"❌ Failed to start background Redis worker: {e}")
+
 if __name__ == "__main__":
-    # If running locally without Docker, use localhost. Inside Docker, 'redis' hostname resolves.
+    # Local execution entry point
     worker = RedisWorker(host='localhost', port=6379)
     worker.listen()
