@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: smart_logistics_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: smart_logistics
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    container_name: smart_logistics_redis
+    ports:
+      - "6379:6379"
+
+  gateway:
+    build: 
+      context: ./gateway
+    container_name: smart_logistics_gateway
+    environment:
+      POSTGRES_URI: postgresql://postgres:password@postgres:5432/smart_logistics
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: npm start
+
+  worker:
+    build:
+      context: ./gateway
+    container_name: smart_logistics_worker
+    environment:
+      POSTGRES_URI: postgresql://postgres:password@postgres:5432/smart_logistics
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: npm run worker
