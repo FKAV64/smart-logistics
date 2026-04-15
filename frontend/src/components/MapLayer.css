@@ -1,0 +1,12 @@
+.map-container {
+  height: 100vh;
+  width: 100%;
+  position: relative;
+  z-index: 0;
+}
+
+.vehicle-marker-icon {
+  background: transparent;
+  border: none;
+  transition: transform 0.2s linear;
+}
