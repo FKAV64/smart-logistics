@@ -39,12 +39,22 @@ def run_test():
     now = datetime.now(timezone.utc)
     
     payload = {
-        "type": "COURIER_EVENT",
+        "event_type": "TRAFFIC_ALERT",
         "route_id": "RT-WINTER-TEST",
         "courier_id": "DRV-884",
-        "current_time_iso": now.isoformat().replace("+00:00", "Z"),
+        "shift_end": "18:00:00",
+        "courier_status": "EN_ROUTE",
         "vehicle_type": "truck",
+        "current_time_iso": now.isoformat().replace("+00:00", "Z"),
+        "current_location": {
+            "lat": 39.7740,
+            "lon": 37.0016,
+            "timestamp": now.isoformat().replace("+00:00", "Z")
+        },
         "environment_horizon": {
+            "weather_condition": "snow",
+            "traffic_level": "congested",
+            "time_bucket": "morning",
             "temperature_c": 2.5,
             "incident_reported": False
         },

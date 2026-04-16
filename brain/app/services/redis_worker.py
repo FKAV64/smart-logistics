@@ -7,6 +7,8 @@ from datetime import datetime
 # Import the core Brain components
 from app.services.ml_engine import MLEngine
 from app.services.routing import RouteOptimizer
+from app.models.schemas import TrafficAlertPayload
+from pydantic import ValidationError
  
  
 class RedisWorker:
@@ -20,7 +22,7 @@ class RedisWorker:
         self.publish_channel = 'route_optimizations_channel'
  
         print("Loading ML Pipeline and Routing Engine...")
-        self.ml_engine       = MLEngine(redis_client=self.redis)
+        self.ml_engine       = MLEngine()
         self.route_optimizer = RouteOptimizer()
         print("✅ Python Brain Worker is Ready and Armed.")
  
@@ -38,6 +40,13 @@ class RedisWorker:
         if message_data.get('type') == 'PING':
             return
  
+        try:
+            # Enforce strict Schema Validation
+            validated_payload = TrafficAlertPayload(**message_data)
+        except ValidationError as e:
+            print(f"❌ Schema Validation Failed: {e}")
+            return
+
         route_id = message_data.get('route_id')
         if not route_id or not self._acquire_lock(route_id):
             return
@@ -75,14 +84,14 @@ class RedisWorker:
                 action   = "RE-ROUTE"
                 reason   = f"Re-ordering stops saves {res['time_saved']} minutes and protects time windows."
                 severity = "high"
-            elif res["max_delay"] > 15:
+            elif message_data.get("event_type") == "TRAFFIC_ALERT" or res["max_delay"] > 15:
                 severity = "medium"
                 if courier_status == "AT_STOP":
                     action = "DELAY_DEPARTURE"
-                    reason = "Current order optimal, but heavy traffic imminent. Suggest waiting 15 mins."
+                    reason = "Heavy localized sequence traffic. Mathematical guidance: Hold at current stop for 15 minutes to avoid idling fuel burn."
                 else:
                     action = "REQUEST_ALTERNATE_PATH"
-                    reason = f"{res['max_delay']}m delay predicted on current path. Requesting physical detour."
+                    reason = "Sequence remains optimal but physical path blocked. Requesting Node.js to fetch alternate TomTom vector."
  
             # Construct the response payload for Node.js
             response_payload = {

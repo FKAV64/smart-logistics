@@ -1,15 +1,12 @@
 import math
 import itertools
-import json
 import pandas as pd
 import joblib
-import redis
  
  
 class MLEngine:
-    def __init__(self, redis_client=None):
+    def __init__(self):
         self.model = joblib.load('trained_models/xgboost_delay_model.pkl')
-        self.redis = redis_client or redis.Redis(host='localhost', port=6379, decode_responses=True)
  
         # The exact feature order the trained XGBoost Pipeline expects.
         # This must match model_metadata.json and the training notebook exactly.
@@ -88,35 +85,7 @@ class MLEngine:
             })
         return pd.DataFrame(matrix_data)
  
-    def _fetch_world_state(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Pulls live weather_condition, traffic_level, and time_bucket from Redis,
-        keyed by road_type. Falls back to safe defaults if Redis has no data yet.
-        """
-        unique_road_types = df['road_type'].unique()
-        redis_keys = [f"env_state:{rt}" for rt in unique_road_types]
-        raw_states = self.redis.mget(redis_keys)
- 
-        state_map = {}
-        for rt, state_json in zip(unique_road_types, raw_states):
-            if state_json:
-                state_map[rt] = json.loads(state_json)
-            else:
-                # Safe defaults when Redis has no cached state for this road type
-                state_map[rt] = {
-                    'weather_condition': 'clear',
-                    'traffic_level':     'low',
-                    'time_bucket':       'midday',
-                }
- 
-        def safe_get(value, category):
-            return value if value in self.VALID_CATEGORIES[category] else self.DEFAULTS[category]
 
-        df['weather_condition'] = df['road_type'].map(lambda x: safe_get(state_map[x].get('weather_condition'), 'weather_condition'))
-        df['traffic_level']     = df['road_type'].map(lambda x: safe_get(state_map[x].get('traffic_level'), 'traffic_level'))
-        df['time_bucket']       = df['road_type'].map(lambda x: safe_get(state_map[x].get('time_bucket'), 'time_bucket'))
-        return df
- 
     def predict_segment_delays(self, payload: dict) -> pd.DataFrame:
         """
         Main entry point called by redis_worker.py.
@@ -126,10 +95,11 @@ class MLEngine:
             "route_id": "...",
             "vehicle_type": "van | truck | motorcycle | car",
             "environment_horizon": {
-                "weather_condition": "...",
-                "traffic_level": "...",
-                "temperature_c": 12.5,        ← lives HERE, not at top level
-                "incident_reported": true      ← lives HERE, not at top level
+                "weather_condition": "clear | cloudy | rain | snow | fog | wind",
+                "traffic_level": "low | moderate | high | congested",
+                "time_bucket": "morning | midday | evening | night",
+                "temperature_c": 12.5,
+                "incident_reported": true
             },
             "unvisited_stops": [ { ...stop fields... } ]
         }
@@ -138,13 +108,17 @@ class MLEngine:
         if len(unvisited_stops) < 2:
             return pd.DataFrame()
  
-        # --- FIX 1: Extract environment_horizon as its own dict ---
-        # temperature_c and incident_reported are nested inside environment_horizon,
-        # NOT at the top level of the payload. Extracting them correctly here.
+        # Extract all ML features from environment_horizon (sent directly by Node.js)
         env = payload.get('environment_horizon', {})
         temperature_c = env.get('temperature_c', 15.0)
-        # incident_reported is a boolean in the schema; convert to int (0/1) for the model
         road_incident = 1 if env.get('incident_reported', False) else 0
+
+        def safe_get(value, category):
+            return value if value in self.VALID_CATEGORIES[category] else self.DEFAULTS[category]
+
+        weather_condition = safe_get(env.get('weather_condition'), 'weather_condition')
+        traffic_level     = safe_get(env.get('traffic_level'),     'traffic_level')
+        time_bucket       = safe_get(env.get('time_bucket'),       'time_bucket')
  
         # vehicle_type IS at the top level of the payload
         vehicle_type = payload.get('vehicle_type', 'van')
@@ -153,17 +127,16 @@ class MLEngine:
             
         base_speed_kmh = self.SPEED_PROFILES.get(vehicle_type, 40.0)
  
-        # 1. Build spatial connections with stop-level features
+        # 1. Build spatial connections with stop-level features using GPS + speed profiles
         df = self._build_adjacency_matrix(unvisited_stops, base_speed_kmh)
- 
-        # 2. Inject live environmental variables from Redis
-        #    (weather_condition and traffic_level per road_type)
-        df = self._fetch_world_state(df)
- 
-        # 3. Inject global payload-level features as broadcast columns
-        df['temperature_c'] = temperature_c
-        df['road_incident']  = road_incident
-        df['vehicle_type']   = vehicle_type
+
+        # 2. Broadcast all global payload-level ML features onto every row
+        df['temperature_c']    = temperature_c
+        df['road_incident']    = road_incident
+        df['vehicle_type']     = vehicle_type
+        df['weather_condition'] = weather_condition
+        df['traffic_level']    = traffic_level
+        df['time_bucket']      = time_bucket
  
         # Use ONLY the features the trained Pipeline knows about
         # Order is strictly maintained by self.EXPECTED_FEATURES
