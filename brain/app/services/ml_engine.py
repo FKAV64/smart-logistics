@@ -26,6 +26,20 @@ class MLEngine:
             'road_incident',         # binary (0 or 1)
         ]
  
+        self.VALID_CATEGORIES = {
+            "road_type": {"highway", "urban", "rural", "mountain"},
+            "vehicle_type": {"van", "truck", "motorcycle", "car"},
+            "weather_condition": {"clear", "cloudy", "rain", "snow", "fog", "wind"},
+            "traffic_level": {"low", "moderate", "high", "congested"}
+        }
+ 
+        self.DEFAULTS = {
+            "road_type": "highway",
+            "vehicle_type": "van",
+            "weather_condition": "clear",
+            "traffic_level": "low"
+        }
+
     def _haversine_distance(self, lat1, lon1, lat2, lon2):
         R = 6371.0
         dlat = math.radians(lat2 - lat1)
@@ -47,10 +61,14 @@ class MLEngine:
                 stop_from['lat'], stop_from['lon'],
                 stop_to['lat'], stop_to['lon']
             )
+            road_type = stop_to.get('road_type', 'highway')
+            if road_type not in self.VALID_CATEGORIES['road_type']:
+                road_type = self.DEFAULTS['road_type']
+
             matrix_data.append({
                 'from_stop':             stop_from['stop_id'],
                 'to_stop':               stop_to['stop_id'],
-                'road_type':             stop_to.get('road_type', 'highway'),
+                'road_type':             road_type,
                 'distance_from_prev_km': round(dist, 2),
                 'stop_sequence':         stop_to.get('current_order', 1),
                 'package_weight_kg':     stop_to.get('package_weight_kg', 5.0),
@@ -79,8 +97,11 @@ class MLEngine:
                     'traffic_level':     'low',
                 }
  
-        df['weather_condition'] = df['road_type'].map(lambda x: state_map[x]['weather_condition'])
-        df['traffic_level']     = df['road_type'].map(lambda x: state_map[x]['traffic_level'])
+        def safe_get(value, category):
+            return value if value in self.VALID_CATEGORIES[category] else self.DEFAULTS[category]
+
+        df['weather_condition'] = df['road_type'].map(lambda x: safe_get(state_map[x].get('weather_condition'), 'weather_condition'))
+        df['traffic_level']     = df['road_type'].map(lambda x: safe_get(state_map[x].get('traffic_level'), 'traffic_level'))
         return df
  
     def predict_segment_delays(self, payload: dict) -> pd.DataFrame:
@@ -114,6 +135,8 @@ class MLEngine:
  
         # vehicle_type IS at the top level of the payload
         vehicle_type = payload.get('vehicle_type', 'van')
+        if vehicle_type not in self.VALID_CATEGORIES['vehicle_type']:
+            vehicle_type = self.DEFAULTS['vehicle_type']
  
         # 1. Build spatial connections with stop-level features
         df = self._build_adjacency_matrix(unvisited_stops)

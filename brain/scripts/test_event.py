@@ -42,6 +42,11 @@ def run_test():
         "route_id": "RT-WINTER-TEST",
         "courier_id": "DRV-884",
         "current_time_iso": now.isoformat() + "Z",
+        "vehicle_type": "truck",
+        "environment_horizon": {
+            "temperature_c": 2.5,
+            "incident_reported": False
+        },
         "unvisited_stops": [
             {
                 "stop_id": "STP-A",
