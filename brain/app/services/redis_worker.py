@@ -21,7 +21,7 @@ class RedisWorker:
  
         print("Loading ML Pipeline and Routing Engine...")
         self.ml_engine       = MLEngine(redis_client=self.redis)
-        self.route_optimizer = RouteOptimizer(base_speed_kmh=40.0)
+        self.route_optimizer = RouteOptimizer()
         print("✅ Python Brain Worker is Ready and Armed.")
  
     def _acquire_lock(self, route_id: str) -> bool:

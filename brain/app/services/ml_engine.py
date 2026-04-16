@@ -39,6 +39,13 @@ class MLEngine:
             "weather_condition": "clear",
             "traffic_level": "low"
         }
+        
+        self.SPEED_PROFILES = {
+            "motorcycle": 52.2,
+            "car":        40.0,
+            "truck":      22.8,
+            "van":        22.5
+        }
 
     def _haversine_distance(self, lat1, lon1, lat2, lon2):
         R = 6371.0
@@ -49,7 +56,7 @@ class MLEngine:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
         return R * c
  
-    def _build_adjacency_matrix(self, unvisited_stops: list) -> pd.DataFrame:
+    def _build_adjacency_matrix(self, unvisited_stops: list, base_speed_kmh: float) -> pd.DataFrame:
         """
         Builds a pairwise matrix of all stop combinations.
         Each row represents one possible segment (from_stop → to_stop)
@@ -65,6 +72,8 @@ class MLEngine:
             if road_type not in self.VALID_CATEGORIES['road_type']:
                 road_type = self.DEFAULTS['road_type']
 
+            dynamic_planned_travel_min = (dist / base_speed_kmh) * 60.0 if base_speed_kmh > 0 else 15.0
+
             matrix_data.append({
                 'from_stop':             stop_from['stop_id'],
                 'to_stop':               stop_to['stop_id'],
@@ -72,7 +81,7 @@ class MLEngine:
                 'distance_from_prev_km': round(dist, 2),
                 'stop_sequence':         stop_to.get('current_order', 1),
                 'package_weight_kg':     stop_to.get('package_weight_kg', 5.0),
-                'planned_travel_min':    stop_to.get('planned_travel_min', 15.0),
+                'planned_travel_min':    round(dynamic_planned_travel_min, 2),
             })
         return pd.DataFrame(matrix_data)
  
@@ -137,9 +146,11 @@ class MLEngine:
         vehicle_type = payload.get('vehicle_type', 'van')
         if vehicle_type not in self.VALID_CATEGORIES['vehicle_type']:
             vehicle_type = self.DEFAULTS['vehicle_type']
+            
+        base_speed_kmh = self.SPEED_PROFILES.get(vehicle_type, 40.0)
  
         # 1. Build spatial connections with stop-level features
-        df = self._build_adjacency_matrix(unvisited_stops)
+        df = self._build_adjacency_matrix(unvisited_stops, base_speed_kmh)
  
         # 2. Inject live environmental variables from Redis
         #    (weather_condition and traffic_level per road_type)
@@ -161,4 +172,4 @@ class MLEngine:
         # Pass distance through to the RouteOptimizer
         df['distance_km'] = df['distance_from_prev_km']
  
-        return df[['from_stop', 'to_stop', 'distance_km', 'predicted_delay_min']]
+        return df[['from_stop', 'to_stop', 'distance_km', 'planned_travel_min', 'predicted_delay_min']]
