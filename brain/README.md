@@ -201,8 +201,6 @@ brain/
 │   └── model_metadata.json     # Feature manifest for the model
 │
 ├── data/                       # Training CSVs (not committed to git)
-│   ├── routes.csv
-│   └── route_stops.csv
 │
 ├── .env                        # Local environment variables (Redis host/port)
 ├── docker-compose.yml          # Spins up Redis 7.2 locally for development
