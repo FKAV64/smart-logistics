@@ -1,101 +1,112 @@
+import os
 import json
 import redis
 import traceback
 from datetime import datetime
-
+ 
 # Import the core Brain components
 from app.services.ml_engine import MLEngine
 from app.services.routing import RouteOptimizer
-
+ 
+ 
 class RedisWorker:
     def __init__(self, host='redis', port=6379):
         """Initializes the connection to Redis and loads the AI models into memory."""
         print("Initializing Gatekeeper and connecting to Redis...")
         self.redis = redis.Redis(host=host, port=port, decode_responses=True)
         self.pubsub = self.redis.pubsub()
-        
-        self.listen_channel = 'traffic_alerts_channel'
+ 
+        self.listen_channel  = 'traffic_alerts_channel'
         self.publish_channel = 'route_optimizations_channel'
-        
+ 
         print("Loading ML Pipeline and Routing Engine...")
-        self.ml_engine = MLEngine(redis_client=self.redis)
+        self.ml_engine       = MLEngine(redis_client=self.redis)
         self.route_optimizer = RouteOptimizer(base_speed_kmh=40.0)
         print("✅ Python Brain Worker is Ready and Armed.")
-
+ 
     def _acquire_lock(self, route_id: str) -> bool:
         """
-        Atomic Lock (Debouncer). 
-        Ensures if Node.js sends 5 quick webhooks for the same truck, we only optimize it once.
+        Atomic Lock (Debouncer).
+        Ensures if Node.js sends 5 quick webhooks for the same truck,
+        we only optimize it once. Lock expires in 10 seconds automatically.
         """
         lock_key = f"lock:optimize:{route_id}"
-        # SETNX sets the key only if it does not exist. Expires in 10 seconds.
         return self.redis.set(lock_key, "locked", nx=True, ex=10)
-
-    # brain/app/services/redis_worker.py
-
+ 
     def process_message(self, message_data: dict):
-        if message_data.get('type') == 'PING': return # [cite: 14]
-        
+        # Ignore heartbeat pings from Node.js
+        if message_data.get('type') == 'PING':
+            return
+ 
         route_id = message_data.get('route_id')
-        if not route_id or not self._acquire_lock(route_id): return # [cite: 15]
-
+        if not route_id or not self._acquire_lock(route_id):
+            return
+ 
         try:
-            unvisited_stops = message_data.get('unvisited_stops', [])
-            courier_status = message_data.get('courier_status', 'EN_ROUTE') # [cite: 45]
-            current_time_iso = message_data.get('current_time_iso', datetime.utcnow().isoformat() + "Z")
-
+            unvisited_stops  = message_data.get('unvisited_stops', [])
+            courier_status   = message_data.get('courier_status', 'EN_ROUTE')
+            current_time_iso = message_data.get(
+                'current_time_iso',
+                datetime.utcnow().isoformat() + "Z"
+            )
+ 
+            # Hand the full payload to the ML engine.
+            # ml_engine.py knows how to unpack environment_horizon correctly.
             scored_matrix = self.ml_engine.predict_segment_delays(message_data)
-            if scored_matrix.empty: return
-
-            # Get optimization results
-            res = self.route_optimizer.optimize_route(unvisited_stops, scored_matrix, current_time_iso)
-
-            # Logic to determine action_type [cite: 27-34]
-            action = "CONTINUE"
-            reason = "Current sequence is mathematically optimal."
+            if scored_matrix.empty:
+                return
+ 
+            # Run the hill-climbing route optimizer
+            res = self.route_optimizer.optimize_route(
+                unvisited_stops, scored_matrix, current_time_iso
+            )
+ 
+            # Determine the action type and severity
+            action   = "CONTINUE"
+            reason   = "Current sequence is mathematically optimal."
             severity = "low"
-
-            if res["is_reordered"]: # [cite: 33]
-                action = "RE-ROUTE"
-                reason = f"Re-ordering stops saves {res['time_saved']} minutes and protects time windows."
+ 
+            if res["is_reordered"]:
+                action   = "RE-ROUTE"
+                reason   = f"Re-ordering stops saves {res['time_saved']} minutes and protects time windows."
                 severity = "high"
             elif res["max_delay"] > 15:
                 severity = "medium"
-                if courier_status == "AT_STOP": # [cite: 29]
+                if courier_status == "AT_STOP":
                     action = "DELAY_DEPARTURE"
-                    reason = f"Current order optimal, but heavy traffic imminent. Suggest waiting 15 mins."
-                else: # [cite: 31]
+                    reason = "Current order optimal, but heavy traffic imminent. Suggest waiting 15 mins."
+                else:
                     action = "REQUEST_ALTERNATE_PATH"
                     reason = f"{res['max_delay']}m delay predicted on current path. Requesting physical detour."
-
-            # Construct final structure exactly as per Documentation [cite: 89-102]
+ 
+            # Construct the response payload for Node.js
             response_payload = {
                 "route_id": route_id,
-                "status": "OPTIMIZED", # [cite: 91]
+                "status":   "OPTIMIZED",
                 "ai_recommendation": {
-                    "action_type": action, # [cite: 93]
-                    "severity": severity, # [cite: 94]
-                    "reason": reason, # [cite: 95]
-                    "new_sequence": res["new_sequence_ids"], # [cite: 96]
-                    "impact": { # [cite: 97]
-                        "time_saved_minutes": res["time_saved"], # [cite: 98]
-                        "route_health": res["health"] # [cite: 99]
+                    "action_type": action,
+                    "severity":    severity,
+                    "reason":      reason,
+                    "new_sequence": res["new_sequence_ids"],
+                    "impact": {
+                        "time_saved_minutes": res["time_saved"],
+                        "route_health":       res["health"]
                     }
                 }
             }
-            
+ 
             self.redis.publish(self.publish_channel, json.dumps(response_payload))
             print(f"✅ Published {action} for {route_id}")
-
+ 
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"❌ Error processing route {route_id}: {str(e)}")
             traceback.print_exc()
-
+ 
     def listen(self):
         """Blocking loop that listens indefinitely to the Pub/Sub channel."""
         self.pubsub.subscribe(self.listen_channel)
         print(f"🎧 Listening for events on '{self.listen_channel}'...")
-        
+ 
         for message in self.pubsub.listen():
             if message['type'] == 'message':
                 try:
@@ -105,20 +116,35 @@ class RedisWorker:
                     print("❌ Received invalid JSON payload from Node.js.")
                 except Exception as e:
                     print(f"❌ Worker critical exception: {str(e)}")
-
+ 
+ 
 # --- Helper for main.py background tasking ---
-
+ 
 def start_redis_listener():
-    """Helper function to allow main.py to spawn the worker as a background task."""
+    """
+    Helper function spawned as a background daemon thread by main.py.
+ 
+    FIX: Uses REDIS_HOST environment variable so the same code works in
+    both local development (localhost) and Docker (service name 'redis').
+ 
+    Set in your .env:
+        REDIS_HOST=localhost   ← for local dev
+        REDIS_HOST=redis       ← for Docker Compose
+    """
     print("Background Task: Spinning up Redis Gatekeeper...")
     try:
-        # Use localhost for local dev. If inside Docker, this might need to be 'redis'
-        worker = RedisWorker(host='localhost', port=6379) 
+        # --- FIX: Read host from environment, default to 'redis' for Docker ---
+        redis_host = os.getenv('REDIS_HOST', 'redis')
+        redis_port = int(os.getenv('REDIS_PORT', 6379))
+        worker = RedisWorker(host=redis_host, port=redis_port)
         worker.listen()
     except Exception as e:
         print(f"❌ Failed to start background Redis worker: {e}")
-
+ 
+ 
 if __name__ == "__main__":
-    # Local execution entry point
-    worker = RedisWorker(host='localhost', port=6379)
+    # Local execution entry point: python -m app.services.redis_worker
+    redis_host = os.getenv('REDIS_HOST', 'localhost')
+    redis_port = int(os.getenv('REDIS_PORT', 6379))
+    worker = RedisWorker(host=redis_host, port=redis_port)
     worker.listen()
