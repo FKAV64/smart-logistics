@@ -18,6 +18,7 @@ class MLEngine:
             'vehicle_type',          # categorical
             'weather_condition',     # categorical
             'traffic_level',         # categorical
+            'time_bucket',           # categorical
             'temperature_c',         # numeric
             'distance_from_prev_km', # numeric
             'planned_travel_min',    # numeric
@@ -30,14 +31,16 @@ class MLEngine:
             "road_type": {"highway", "urban", "rural", "mountain"},
             "vehicle_type": {"van", "truck", "motorcycle", "car"},
             "weather_condition": {"clear", "cloudy", "rain", "snow", "fog", "wind"},
-            "traffic_level": {"low", "moderate", "high", "congested"}
+            "traffic_level": {"low", "moderate", "high", "congested"},
+            "time_bucket": {"morning", "midday", "evening", "night"}
         }
  
         self.DEFAULTS = {
             "road_type": "highway",
             "vehicle_type": "van",
             "weather_condition": "clear",
-            "traffic_level": "low"
+            "traffic_level": "low",
+            "time_bucket": "midday"
         }
         
         self.SPEED_PROFILES = {
@@ -87,9 +90,8 @@ class MLEngine:
  
     def _fetch_world_state(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Pulls live weather_condition and traffic_level from Redis,
+        Pulls live weather_condition, traffic_level, and time_bucket from Redis,
         keyed by road_type. Falls back to safe defaults if Redis has no data yet.
-        Note: time_bucket is NOT a model feature and is intentionally excluded.
         """
         unique_road_types = df['road_type'].unique()
         redis_keys = [f"env_state:{rt}" for rt in unique_road_types]
@@ -104,6 +106,7 @@ class MLEngine:
                 state_map[rt] = {
                     'weather_condition': 'clear',
                     'traffic_level':     'low',
+                    'time_bucket':       'midday',
                 }
  
         def safe_get(value, category):
@@ -111,6 +114,7 @@ class MLEngine:
 
         df['weather_condition'] = df['road_type'].map(lambda x: safe_get(state_map[x].get('weather_condition'), 'weather_condition'))
         df['traffic_level']     = df['road_type'].map(lambda x: safe_get(state_map[x].get('traffic_level'), 'traffic_level'))
+        df['time_bucket']       = df['road_type'].map(lambda x: safe_get(state_map[x].get('time_bucket'), 'time_bucket'))
         return df
  
     def predict_segment_delays(self, payload: dict) -> pd.DataFrame:
@@ -161,9 +165,8 @@ class MLEngine:
         df['road_incident']  = road_incident
         df['vehicle_type']   = vehicle_type
  
-        # --- FIX 2: Use ONLY the features the trained Pipeline knows about ---
-        # The original code included 'time_bucket' which was never a training feature.
-        # This would cause a column error at predict() time.
+        # Use ONLY the features the trained Pipeline knows about
+        # Order is strictly maintained by self.EXPECTED_FEATURES
         features = df[self.EXPECTED_FEATURES]
  
         # Run the XGBoost Pipeline (preprocessor + model in one call)

@@ -5,6 +5,7 @@
         "vehicle_type",
         "weather_condition",
         "traffic_level",
+        "time_bucket",
         "temperature_c",
         "distance_from_prev_km",
         "planned_travel_min",
@@ -17,7 +18,8 @@
             "road_type",
             "vehicle_type",
             "weather_condition",
-            "traffic_level"
+            "traffic_level",
+            "time_bucket"
         ],
         "numeric": [
             "temperature_c",
