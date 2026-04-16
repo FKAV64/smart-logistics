@@ -66,7 +66,12 @@ class RedisWorker:
             reason   = "Current sequence is mathematically optimal."
             severity = "low"
  
-            if res["is_reordered"]:
+            if res.get("health") == "FAILED":
+                late_time = res.get('minutes_late', 0)
+                action   = "NOTIFY_DISPATCH_LATE"
+                reason   = f"Mathematical impossibility: Route will miss delivery windows by at least {late_time} minutes. Alerting Dispatch."
+                severity = "CRITICAL"
+            elif res["is_reordered"]:
                 action   = "RE-ROUTE"
                 reason   = f"Re-ordering stops saves {res['time_saved']} minutes and protects time windows."
                 severity = "high"

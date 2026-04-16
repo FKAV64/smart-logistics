@@ -1,7 +1,7 @@
 import redis
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 def run_test():
     print("🔌 Connecting to Redis...")
@@ -35,13 +35,14 @@ def run_test():
     # ==========================================
     # 2. BUILD THE COURIER PAYLOAD
     # ==========================================
-    now = datetime.utcnow()
+    # Fixed DeprecationWarning by using timezone.utc
+    now = datetime.now(timezone.utc)
     
     payload = {
         "type": "COURIER_EVENT",
         "route_id": "RT-WINTER-TEST",
         "courier_id": "DRV-884",
-        "current_time_iso": now.isoformat() + "Z",
+        "current_time_iso": now.isoformat().replace("+00:00", "Z"),
         "vehicle_type": "truck",
         "environment_horizon": {
             "temperature_c": 2.5,
@@ -53,9 +54,9 @@ def run_test():
                 "lat": 39.7743, # Mountain coordinates
                 "lon": 37.0019,
                 "road_type": "mountain",
-                # Window closes in 60 minutes
-                "window_start": (now + timedelta(minutes=10)).isoformat() + "Z",
-                "window_end": (now + timedelta(minutes=60)).isoformat() + "Z",
+                # Window closes in 60 minutes (Plenty of time)
+                "window_start": (now + timedelta(minutes=5)).isoformat().replace("+00:00", "Z"),
+                "window_end": (now + timedelta(minutes=60)).isoformat().replace("+00:00", "Z"),
                 "planned_service_min": 5.0
             },
             {
@@ -63,9 +64,9 @@ def run_test():
                 "lat": 39.8021, # Highway coordinates
                 "lon": 37.1554,
                 "road_type": "highway",
-                # Window closes in 45 minutes (Tighter window!)
-                "window_start": (now + timedelta(minutes=15)).isoformat() + "Z",
-                "window_end": (now + timedelta(minutes=45)).isoformat() + "Z",
+                # URGENT: Window closes in exactly 15 minutes!
+                "window_start": now.isoformat().replace("+00:00", "Z"),
+                "window_end": (now + timedelta(minutes=15)).isoformat().replace("+00:00", "Z"),
                 "planned_service_min": 5.0
             }
         ]

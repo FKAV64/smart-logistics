@@ -38,6 +38,7 @@ class RouteOptimizer:
         current_time = start_time
         total_cost_minutes = 0
         max_delay_encountered = 0.0
+        max_minutes_late = 0.0
         
         for i in range(len(sequence) - 1):
             from_stop = sequence[i]
@@ -46,7 +47,7 @@ class RouteOptimizer:
             # Fetch AI-adjusted travel time from our fast lookup matrix
             edge = lookup.get((from_stop['stop_id'], to_stop['stop_id']))
             if not edge:
-                return float('inf'), 0.0 # Invalid sequence (missing matrix data)
+                return float('inf'), 0.0, 0.0 # Invalid sequence (missing matrix data)
                 
             travel_time = edge['travel_time']
             max_delay_encountered = max(max_delay_encountered, edge['predicted_delay'])
@@ -61,6 +62,8 @@ class RouteOptimizer:
             
             # HARD CONSTRAINT: Did we arrive too late?
             if current_time > window_end:
+                late_by = (current_time - window_end).total_seconds() / 60.0
+                max_minutes_late = max(max_minutes_late, late_by)
                 total_cost_minutes += 10000  # Massive penalty to discard this route
                 
             # CONSTRAINT: Did we arrive too early?
@@ -73,7 +76,7 @@ class RouteOptimizer:
             service_min = to_stop.get('planned_service_min', 5.0)
             current_time += timedelta(minutes=service_min)
             
-        return total_cost_minutes, max_delay_encountered
+        return total_cost_minutes, max_delay_encountered, max_minutes_late
 
     def optimize_route(self, unvisited_stops: list, scored_matrix: pd.DataFrame, current_time_iso: str):
             if len(unvisited_stops) <= 1:
@@ -82,6 +85,7 @@ class RouteOptimizer:
                     "new_sequence_ids": [s['stop_id'] for s in unvisited_stops],
                     "time_saved": 0,
                     "max_delay": 0,
+                    "minutes_late": 0,
                     "health": "OPTIMAL"
                 }
                 
@@ -90,23 +94,25 @@ class RouteOptimizer:
             
             # Original sequence evaluation
             original_sequence = copy.deepcopy(unvisited_stops)
-            original_cost, original_delay = self._evaluate_sequence(original_sequence, lookup, start_time)
+            original_cost, original_delay, original_late = self._evaluate_sequence(original_sequence, lookup, start_time)
             
             # Hill-Climbing Optimization
             best_sequence = copy.deepcopy(original_sequence)
             best_cost = original_cost
             best_delay = original_delay
+            best_late = original_late
             
             for _ in range(1000):
                 new_seq = copy.deepcopy(best_sequence)
                 idx1, idx2 = random.sample(range(len(new_seq)), 2)
                 new_seq[idx1], new_seq[idx2] = new_seq[idx2], new_seq[idx1]
-                new_cost, new_delay = self._evaluate_sequence(new_seq, lookup, start_time)
+                new_cost, new_delay, new_late = self._evaluate_sequence(new_seq, lookup, start_time)
                 
                 if new_cost < best_cost:
                     best_cost = new_cost
                     best_sequence = new_seq
                     best_delay = new_delay
+                    best_late = new_late
 
             # Calculate performance deltas
             time_saved = max(0, original_cost - best_cost)
@@ -123,5 +129,6 @@ class RouteOptimizer:
                 "new_sequence_ids": [s['stop_id'] for s in best_sequence],
                 "time_saved": int(time_saved),
                 "max_delay": int(best_delay),
+                "minutes_late": int(best_late),
                 "health": health
             }
