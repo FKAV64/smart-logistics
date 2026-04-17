@@ -62,10 +62,15 @@ function setupWebSocket(wss) {
             if (state.accumulatedDistanceKM >= 1.0) { // 1 km threshold
               const timeS = (Date.now() - state.segmentStartTime) / 1000;
               const hours = timeS / 3600;
-              const avgSpeed = state.accumulatedDistanceKM / hours; // km/h
+              let avgSpeed = state.accumulatedDistanceKM / hours; // km/h
 
               // Assuming the courier sends an approximate segment_id they are on
               const segmentId = data.segment_id || 1; 
+
+              // Override for test script speed injection
+              if (data.test_spoof_speed !== undefined && data.test_spoof_speed !== null) {
+                avgSpeed = data.test_spoof_speed;
+              }
 
               // Trigger Writer Behind Worker
               await pubClient.xadd(
@@ -119,10 +124,9 @@ function setupWebSocket(wss) {
                 [stop.stop_order, stop.stop_id, routeId]
               );
             }
-            // Update route status if necessary
             await db.query(
               'UPDATE routes SET status = $1, ai_recommendation = $2 WHERE route_id = $3',
-              ['REORDER_APPROVED', JSON.stringify({ approvedAt: new Date().toISOString() }), routeId]
+              ['IN_TRANSIT', JSON.stringify({ approvedAt: new Date().toISOString() }), routeId]
             );
             await db.query('COMMIT');
 

@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const pool = new Pool({
-  connectionString: 'postgresql://postgres:password@localhost:5432/smart_logistics'
+  connectionString: 'postgresql://postgres:password@localhost:5433/smart_logistics'
 });
 
 async function runSeed() {
