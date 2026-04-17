@@ -11,3 +11,9 @@ scikit-learn
 xgboost
 pandas
 joblib
+psycopg2-binary
+SQLAlchemy
+geoalchemy2
+networkx
+osmnx
+geopandas

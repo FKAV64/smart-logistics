@@ -39,7 +39,7 @@ class TrafficAlertPayload(BaseModel):
     This is validated by the Redis Worker before any ML computation begins.
     """
     event_type: str      = Field(..., description="ROUTINE_HEALTH_CHECK or TRAFFIC_ALERT")
-    route_id: str        = Field(..., description="Unique ID of the route being optimized")
+    manifest_id: str     = Field(..., description="Unique ID of the manifest being optimized")
     courier_id: str      = Field(..., description="Unique ID of the driver")
     courier_status: str  = Field(..., description="Driver's current status: EN_ROUTE or AT_STOP")
     vehicle_type: str    = Field(..., description="ML Feature: van, truck, motorcycle, car")

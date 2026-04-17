@@ -9,6 +9,8 @@ from app.services.ml_engine import MLEngine
 from app.services.routing import RouteOptimizer
 from app.models.schemas import TrafficAlertPayload
 from pydantic import ValidationError
+from app.services.map_seeder import seed_map_if_empty
+from app.services.map_engine import MapEngine
  
  
 class RedisWorker:
@@ -22,17 +24,22 @@ class RedisWorker:
         self.publish_channel = 'route_optimizations_channel'
  
         print("Loading ML Pipeline and Routing Engine...")
+        
+        # Ensure database map is populated
+        seed_map_if_empty()
+        
+        self.map_engine      = MapEngine()
         self.ml_engine       = MLEngine()
-        self.route_optimizer = RouteOptimizer()
+        self.route_optimizer = RouteOptimizer(self.map_engine)
         print("✅ Python Brain Worker is Ready and Armed.")
  
-    def _acquire_lock(self, route_id: str) -> bool:
+    def _acquire_lock(self, manifest_id: str) -> bool:
         """
         Atomic Lock (Debouncer).
         Ensures if Node.js sends 5 quick webhooks for the same truck,
         we only optimize it once. Lock expires in 10 seconds automatically.
         """
-        lock_key = f"lock:optimize:{route_id}"
+        lock_key = f"lock:optimize:{manifest_id}"
         return self.redis.set(lock_key, "locked", nx=True, ex=10)
  
     def process_message(self, message_data: dict):
@@ -47,8 +54,8 @@ class RedisWorker:
             print(f"❌ Schema Validation Failed: {e}")
             return
 
-        route_id = message_data.get('route_id')
-        if not route_id or not self._acquire_lock(route_id):
+        manifest_id = message_data.get('manifest_id')
+        if not manifest_id or not self._acquire_lock(manifest_id):
             return
  
         try:
@@ -59,10 +66,9 @@ class RedisWorker:
                 datetime.utcnow().isoformat() + "Z"
             )
  
-            # Hand the full payload to the ML engine.
-            # ml_engine.py knows how to unpack environment_horizon correctly.
-            scored_matrix = self.ml_engine.predict_segment_delays(message_data)
-            if scored_matrix.empty:
+            # Hand the full payload to the ML engine along with the geographic graph
+            scored_matrix = self.ml_engine.predict_segment_delays(message_data, self.map_engine.get_graph())
+            if not scored_matrix.edges:
                 return
  
             # Run the hill-climbing route optimizer
@@ -95,7 +101,7 @@ class RedisWorker:
  
             # Construct the response payload for Node.js
             response_payload = {
-                "route_id": route_id,
+                "manifest_id": manifest_id,
                 "status":   "OPTIMIZED",
                 "ai_recommendation": {
                     "action_type": action,
@@ -105,15 +111,16 @@ class RedisWorker:
                     "impact": {
                         "time_saved_minutes": res["time_saved"],
                         "route_health":       res["health"]
-                    }
+                    },
+                    "route_geojson": res.get("route_geojson")
                 }
             }
  
             self.redis.publish(self.publish_channel, json.dumps(response_payload))
-            print(f"✅ Published {action} for {route_id}")
+            print(f"✅ Published {action} for {manifest_id}")
  
         except Exception as e:
-            print(f"❌ Error processing route {route_id}: {str(e)}")
+            print(f"❌ Error processing manifest {manifest_id}: {str(e)}")
             traceback.print_exc()
  
     def listen(self):

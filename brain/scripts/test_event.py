@@ -40,7 +40,7 @@ def run_test():
     
     payload = {
         "event_type": "TRAFFIC_ALERT",
-        "route_id": "RT-WINTER-TEST",
+        "manifest_id": "RT-WINTER-TEST",
         "courier_id": "DRV-884",
         "shift_end": "18:00:00",
         "courier_status": "EN_ROUTE",
@@ -67,7 +67,8 @@ def run_test():
                 # Window closes in 60 minutes (Plenty of time)
                 "window_start": (now + timedelta(minutes=5)).isoformat().replace("+00:00", "Z"),
                 "window_end": (now + timedelta(minutes=60)).isoformat().replace("+00:00", "Z"),
-                "planned_service_min": 5.0
+                "current_order": 1,
+                "package_weight_kg": 2.5
             },
             {
                 "stop_id": "STP-B",
@@ -77,7 +78,8 @@ def run_test():
                 # URGENT: Window closes in exactly 15 minutes!
                 "window_start": now.isoformat().replace("+00:00", "Z"),
                 "window_end": (now + timedelta(minutes=15)).isoformat().replace("+00:00", "Z"),
-                "planned_service_min": 5.0
+                "current_order": 2,
+                "package_weight_kg": 1.2
             }
         ]
     }

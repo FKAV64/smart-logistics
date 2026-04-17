@@ -2,6 +2,7 @@ import math
 import itertools
 import pandas as pd
 import joblib
+import networkx as nx
  
  
 class MLEngine:
@@ -56,59 +57,20 @@ class MLEngine:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
         return R * c
  
-    def _build_adjacency_matrix(self, unvisited_stops: list, base_speed_kmh: float) -> pd.DataFrame:
+    def predict_segment_delays(self, payload: dict, map_graph) -> nx.DiGraph:
         """
-        Builds a pairwise matrix of all stop combinations.
-        Each row represents one possible segment (from_stop → to_stop)
-        with the stop-level features the model needs.
+        Instead of predicting delays between stops (straight lines),
+        this predicts delays on actual physical street segments and outputs
+        a dynamically scored NetworkX Graph ready for true physical routing.
         """
-        matrix_data = []
-        for stop_from, stop_to in itertools.permutations(unvisited_stops, 2):
-            dist = self._haversine_distance(
-                stop_from['lat'], stop_from['lon'],
-                stop_to['lat'], stop_to['lon']
-            )
-            road_type = stop_to.get('road_type', 'highway')
-            if road_type not in self.VALID_CATEGORIES['road_type']:
-                road_type = self.DEFAULTS['road_type']
+        # We create a fresh copy of the bare street layout so we can mutate weights
+        scored_graph = map_graph.copy()
+        edges = scored_graph.edges(data=True)
+        
+        if not edges:
+            return scored_graph
 
-            dynamic_planned_travel_min = (dist / base_speed_kmh) * 60.0 if base_speed_kmh > 0 else 15.0
-
-            matrix_data.append({
-                'from_stop':             stop_from['stop_id'],
-                'to_stop':               stop_to['stop_id'],
-                'road_type':             road_type,
-                'distance_from_prev_km': round(dist, 2),
-                'stop_sequence':         stop_to.get('current_order', 1),
-                'package_weight_kg':     stop_to.get('package_weight_kg', 5.0),
-                'planned_travel_min':    round(dynamic_planned_travel_min, 2),
-            })
-        return pd.DataFrame(matrix_data)
- 
-
-    def predict_segment_delays(self, payload: dict) -> pd.DataFrame:
-        """
-        Main entry point called by redis_worker.py.
- 
-        Expects the full TrafficAlertPayload dict with this structure:
-        {
-            "route_id": "...",
-            "vehicle_type": "van | truck | motorcycle | car",
-            "environment_horizon": {
-                "weather_condition": "clear | cloudy | rain | snow | fog | wind",
-                "traffic_level": "low | moderate | high | congested",
-                "time_bucket": "morning | midday | evening | night",
-                "temperature_c": 12.5,
-                "incident_reported": true
-            },
-            "unvisited_stops": [ { ...stop fields... } ]
-        }
-        """
-        unvisited_stops = payload.get('unvisited_stops', [])
-        if len(unvisited_stops) < 2:
-            return pd.DataFrame()
- 
-        # Extract all ML features from environment_horizon (sent directly by Node.js)
+        # Extract environment features from payload
         env = payload.get('environment_horizon', {})
         temperature_c = env.get('temperature_c', 15.0)
         road_incident = 1 if env.get('incident_reported', False) else 0
@@ -119,33 +81,56 @@ class MLEngine:
         weather_condition = safe_get(env.get('weather_condition'), 'weather_condition')
         traffic_level     = safe_get(env.get('traffic_level'),     'traffic_level')
         time_bucket       = safe_get(env.get('time_bucket'),       'time_bucket')
- 
-        # vehicle_type IS at the top level of the payload
+        
         vehicle_type = payload.get('vehicle_type', 'van')
         if vehicle_type not in self.VALID_CATEGORIES['vehicle_type']:
             vehicle_type = self.DEFAULTS['vehicle_type']
             
         base_speed_kmh = self.SPEED_PROFILES.get(vehicle_type, 40.0)
- 
-        # 1. Build spatial connections with stop-level features using GPS + speed profiles
-        df = self._build_adjacency_matrix(unvisited_stops, base_speed_kmh)
 
-        # 2. Broadcast all global payload-level ML features onto every row
-        df['temperature_c']    = temperature_c
-        df['road_incident']    = road_incident
-        df['vehicle_type']     = vehicle_type
-        df['weather_condition'] = weather_condition
-        df['traffic_level']    = traffic_level
-        df['time_bucket']      = time_bucket
- 
-        # Use ONLY the features the trained Pipeline knows about
-        # Order is strictly maintained by self.EXPECTED_FEATURES
+        # Build feature matrix mapping to physically true edges
+        edge_data = []
+        edge_keys = []
+        
+        for u, v, data in edges:
+            dist_km = data.get('distance_km', 0.1)
+            planned_min = (dist_km / base_speed_kmh) * 60.0 if base_speed_kmh > 0 else 1.0
+            
+            # Using basic default heuristics for street type if not derived natively
+            road_type = 'urban' if dist_km < 1.0 else 'highway'
+            
+            edge_data.append({
+                'road_type': road_type,
+                'distance_from_prev_km': round(dist_km, 2),
+                'stop_sequence': 1, # Not strictly applicable per segment
+                'package_weight_kg': 5.0, # Defaulting for edge inference
+                'planned_travel_min': round(planned_min, 2),
+                'temperature_c': temperature_c,
+                'road_incident': road_incident,
+                'vehicle_type': vehicle_type,
+                'weather_condition': weather_condition,
+                'traffic_level': traffic_level,
+                'time_bucket': time_bucket
+            })
+            edge_keys.append((u, v))
+
+        df = pd.DataFrame(edge_data)
         features = df[self.EXPECTED_FEATURES]
- 
-        # Run the XGBoost Pipeline (preprocessor + model in one call)
-        df['predicted_delay_min'] = self.model.predict(features)
- 
-        # Pass distance through to the RouteOptimizer
-        df['distance_km'] = df['distance_from_prev_km']
- 
-        return df[['from_stop', 'to_stop', 'distance_km', 'planned_travel_min', 'predicted_delay_min']]
+
+        # Bulk inference using the pretrained pipeline! Super fast even on 10,000 rows.
+        predicted_delays = self.model.predict(features)
+        
+        # Apply the AI outputs directly back onto the NetworkX geographic properties (Weights)
+        for idx, (u, v) in enumerate(edge_keys):
+            base_time = edge_data[idx]['planned_travel_min']
+            ml_delay = float(predicted_delays[idx])
+            
+            # Overall AI-powered Routing Cost
+            absolute_cost_minutes = base_time + max(0.0, ml_delay)
+            
+            # Embed into the edge
+            scored_graph[u][v]['weight'] = absolute_cost_minutes
+            scored_graph[u][v]['planned_travel_min'] = base_time
+            scored_graph[u][v]['predicted_delay_min'] = ml_delay
+
+        return scored_graph

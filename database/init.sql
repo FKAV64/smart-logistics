@@ -107,10 +107,3 @@ CREATE TABLE traffic_snapshots (
     incident_reported BOOLEAN DEFAULT FALSE
 );
 
-CREATE TABLE aggregated_delays (
-    segment_id VARCHAR(50) REFERENCES segments(segment_id) ON DELETE CASCADE,
-    time_block VARCHAR(50),         -- e.g., '08:00-09:00'
-    weather_type VARCHAR(50),       -- e.g., 'RAIN'
-    avg_historical_delay_minutes FLOAT DEFAULT 0.0,
-    PRIMARY KEY (segment_id, time_block, weather_type)
-);
