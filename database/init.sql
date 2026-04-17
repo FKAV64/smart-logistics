@@ -1,93 +1,116 @@
--- Enable PostGIS extension for spatial mapping
+-- Enable PostGIS for geospatial queries
 CREATE EXTENSION IF NOT EXISTS postgis;
 
 -- ==========================================
--- DOMAIN 1: OPERATIONAL DATA (Core Logic)
+-- DOMAIN 1: OPERATIONAL ENTITIES
 -- ==========================================
 
-CREATE TABLE couriers (
-    courier_id VARCHAR(50) PRIMARY KEY, -- ex. "DRV-884"
+CREATE TABLE admins (
+    admin_id SERIAL PRIMARY KEY,
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
-    phone VARCHAR(20) NOT NULL, -- E.164
-    vehicle_type VARCHAR(50) NOT NULL, -- Box Truck, Bicycle, etc.
-    hire_date DATE NOT NULL
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL
 );
 
-CREATE TABLE routes (
-    route_id SERIAL PRIMARY KEY,
-    courier_id VARCHAR(50) NOT NULL REFERENCES couriers(courier_id) ON DELETE CASCADE,
-    date DATE NOT NULL,
-    shift_start TIMESTAMP NOT NULL, -- Contracted boundaries
-    shift_end TIMESTAMP NOT NULL,
-    status VARCHAR(50) DEFAULT 'PLANNED' CHECK (status IN ('PLANNED', 'IN_TRANSIT', 'AT_RISK', 'REORDER_SUGGESTED', 'COMPLETED')),
-    ai_recommendation JSONB DEFAULT NULL -- flexible JSON payload explaining delay
+CREATE TABLE couriers (
+    courier_id VARCHAR(50) PRIMARY KEY,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    phone VARCHAR(50),
+    register_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    vehicle_type VARCHAR(50)
 );
 
-CREATE TABLE stops (
-    stop_id SERIAL PRIMARY KEY,
-    route_id INT NOT NULL REFERENCES routes(route_id) ON DELETE CASCADE,
-    client_customer_id VARCHAR(255) NOT NULL, -- Blind pass-through string
-    lat NUMERIC(10, 7) NOT NULL,
-    lon NUMERIC(10, 7) NOT NULL,
-    window_start TIMESTAMP NOT NULL, -- SLA start
-    window_end TIMESTAMP NOT NULL, -- SLA end
-    stop_order INT NOT NULL -- Current sequence
+CREATE TABLE clients (
+    client_id VARCHAR(50) PRIMARY KEY,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    phone VARCHAR(50)
 );
-
-CREATE TABLE segments (
-    segment_id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    start_lat NUMERIC(10, 7) NOT NULL,
-    start_lon NUMERIC(10, 7) NOT NULL,
-    end_lat NUMERIC(10, 7) NOT NULL,
-    end_lon NUMERIC(10, 7) NOT NULL,
-    geom geometry(LINESTRING, 4326) NOT NULL -- PostGIS Spatial Rule (WGS 84)
-);
-
--- Spatial index for quick GIS queries
-CREATE INDEX idx_segments_geom ON segments USING GIST (geom);
-
 
 -- ==========================================
--- DOMAIN 2: TELEMETRY DATA (Real-Time Fleet)
+-- DOMAIN 2: LOGISTICS ASSIGNMENT (PIVOT ARCHITECTURE)
+-- ==========================================
+
+CREATE TABLE client_commande_detail (
+    commande_id SERIAL PRIMARY KEY,
+    client_id VARCHAR(50) REFERENCES clients(client_id) ON DELETE CASCADE,
+    weight_kg DECIMAL(10,2),
+    window_start TIMESTAMP,
+    window_end TIMESTAMP,
+    lat FLOAT NOT NULL,
+    lon FLOAT NOT NULL
+);
+
+CREATE TABLE daily_manifest (
+    manifest_id VARCHAR(50) PRIMARY KEY,
+    courier_id VARCHAR(50) REFERENCES couriers(courier_id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    status VARCHAR(50) DEFAULT 'PLANNED' CHECK (status IN ('PLANNED', 'IN_TRANSIT', 'COMPLETED', 'DELAYED')),
+    ai_recommendation JSONB DEFAULT NULL
+);
+
+CREATE TABLE manifest_stops (
+    stop_id SERIAL PRIMARY KEY,
+    manifest_id VARCHAR(50) REFERENCES daily_manifest(manifest_id) ON DELETE CASCADE,
+    commande_id INT REFERENCES client_commande_detail(commande_id) ON DELETE CASCADE,
+    delivery_order INT NOT NULL,
+    delivery_status VARCHAR(50) DEFAULT 'PENDING' CHECK (delivery_status IN ('PENDING', 'DELIVERED', 'FAILED', 'SKIPPED')),
+    actual_delivery_time TIMESTAMP DEFAULT NULL
+);
+
+-- ==========================================
+-- DOMAIN 3: SPATIAL DATA (CITY TOPOLOGY)
+-- ==========================================
+
+CREATE TABLE segments (
+    segment_id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(255),
+    start_lat FLOAT NOT NULL,
+    start_lon FLOAT NOT NULL,
+    end_lat FLOAT NOT NULL,
+    end_lon FLOAT NOT NULL,
+    geom GEOMETRY(LineString, 4326)
+);
+
+CREATE INDEX segments_geom_idx ON segments USING GIST (geom);
+
+-- ==========================================
+-- DOMAIN 4: TELEMETRY & AI (REDIS-WORKER FED)
 -- ==========================================
 
 CREATE TABLE segment_telemetry (
     telemetry_id SERIAL PRIMARY KEY,
-    segment_id INT NOT NULL REFERENCES segments(segment_id) ON DELETE RESTRICT,
-    courier_id VARCHAR(50) NOT NULL REFERENCES couriers(courier_id) ON DELETE CASCADE,
+    segment_id VARCHAR(50) REFERENCES segments(segment_id) ON DELETE CASCADE,
+    courier_id VARCHAR(50) REFERENCES couriers(courier_id) ON DELETE CASCADE,
     entry_time TIMESTAMP NOT NULL,
-    exit_time TIMESTAMP NOT NULL, -- Only inserted after completing the 1km segment
-    average_speed NUMERIC(5, 2) NOT NULL -- km/h
+    exit_time TIMESTAMP NOT NULL,
+    average_speed FLOAT NOT NULL
 );
-
-
--- ==========================================
--- DOMAIN 3: CONTEXT & AI (ML Training Ground)
--- ==========================================
 
 CREATE TABLE environmental_snapshots (
     snapshot_id SERIAL PRIMARY KEY,
-    segment_id INT NOT NULL REFERENCES segments(segment_id) ON DELETE RESTRICT,
-    timestamp TIMESTAMP NOT NULL, -- Written every 1 hour via Node cron
-    temperature NUMERIC(5, 2),
-    precipitation NUMERIC(5, 2),
-    wind NUMERIC(5, 2),
-    road_condition VARCHAR(50) CHECK (road_condition IN ('NORMAL', 'WET', 'FLOODED', 'ICE', 'CONSTRUCTION', 'CLOSED'))
+    segment_id VARCHAR(50) REFERENCES segments(segment_id) ON DELETE CASCADE,
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    temperature_c INT,
+    weather_condition VARCHAR(100)
 );
 
 CREATE TABLE traffic_snapshots (
-    snapshot_id SERIAL PRIMARY KEY,
-    segment_id INT NOT NULL REFERENCES segments(segment_id) ON DELETE RESTRICT,
-    timestamp TIMESTAMP NOT NULL, -- Written every 15 min via Node cron
-    macro_traffic_speed NUMERIC(5, 2) NOT NULL -- City's reported average speed
+    traffic_snapshot_id SERIAL PRIMARY KEY,
+    segment_id VARCHAR(50) REFERENCES segments(segment_id) ON DELETE CASCADE,
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    traffic_level VARCHAR(50),      -- e.g., 'LIGHT', 'MODERATE', 'HEAVY', 'GRIDLOCK'
+    incident_reported BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE aggregated_delays (
-    segment_id INT NOT NULL REFERENCES segments(segment_id) ON DELETE CASCADE,
-    time_block VARCHAR(50) NOT NULL, -- e.g., "16:00-17:00"
-    weather_type VARCHAR(50) NOT NULL, -- e.g., "RAIN"
-    avg_historical_delay_minutes NUMERIC(5, 2) NOT NULL, -- Extracted AI memory
+    segment_id VARCHAR(50) REFERENCES segments(segment_id) ON DELETE CASCADE,
+    time_block VARCHAR(50),         -- e.g., '08:00-09:00'
+    weather_type VARCHAR(50),       -- e.g., 'RAIN'
+    avg_historical_delay_minutes FLOAT DEFAULT 0.0,
     PRIMARY KEY (segment_id, time_block, weather_type)
 );

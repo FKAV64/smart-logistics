@@ -30,7 +30,7 @@ subClient.on('message', async (channel, message) => {
     // We assume this courier is on Route 1, and we want to change stop order 1->2->3 to e.g., 3->1->2
     const recommendation = {
       event: 'OPTIMIZATION_READY',
-      routeId: 1, // Hardcoded for simulator
+      routeId: 'MAN-1', // Hardcoded to match Seed data
       reason: `Traffic gridlock on Segment ${alert.segment_id}. Bypass via Side Streets recommended.`,
       recommendedStopsOrder: [
         { stop_id: 3, stop_order: 1 },

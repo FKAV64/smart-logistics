@@ -117,15 +117,15 @@ function setupWebSocket(wss) {
           
           await db.query('BEGIN');
           try {
-            // Update the stop_order for the modified route stops
+            // Update the delivery_order for the modified route stops
             for (const stop of recommendedStopsOrder) {
               await db.query(
-                'UPDATE stops SET stop_order = $1 WHERE stop_id = $2 AND route_id = $3',
+                'UPDATE manifest_stops SET delivery_order = $1 WHERE stop_id = $2 AND manifest_id = $3',
                 [stop.stop_order, stop.stop_id, routeId]
               );
             }
             await db.query(
-              'UPDATE routes SET status = $1, ai_recommendation = $2 WHERE route_id = $3',
+              'UPDATE daily_manifest SET status = $1, ai_recommendation = $2 WHERE manifest_id = $3',
               ['IN_TRANSIT', JSON.stringify({ approvedAt: new Date().toISOString() }), routeId]
             );
             await db.query('COMMIT');
