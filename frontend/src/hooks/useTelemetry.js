@@ -16,6 +16,7 @@ export const useTelemetry = () => {
     markDeliveryCompleted,
     setActiveDelivery,
     updateUser,
+    setActiveRoutes,
     user
   } = useCourierStore();
   
@@ -75,6 +76,8 @@ export const useTelemetry = () => {
               markDeliveryCompleted(data.payload.deliveryId);
               break;
             case 'ACTIVE_ROUTE_UPDATE':
+              console.log('[WS] Received ACTIVE_ROUTE_UPDATE:', data.payload);
+              setActiveRoutes([data.payload]);
               break;
             default:
               console.log('[WS] Unhandled message type:', data.type);

@@ -100,8 +100,7 @@ export const useCourierStore = create((set) => ({
 
   // Auth Actions
   login: async (email, password) => {
-
-
+    try {
       const res = await fetch(`${API_BASE_URL}/login`, {
         method: 'POST',
         headers: {

@@ -88,17 +88,18 @@ const MapLayer = () => {
       {/* Render Active Routes */}
       {activeRoutes.map((routeData, index) => (
         <GeoJSON 
-          key={index} 
+          key={`active-route-${Math.random()}`} // Force remount when data changes
           data={routeData} 
           style={{ color: '#3b82f6', weight: 4, opacity: 0.7 }} 
         />
       ))}
 
       {/* Render Proposed Route (Overlay, dashed) */}
-      {proposedRouteCoords.length > 0 && (
-        <Polyline 
-          positions={proposedRouteCoords} 
-          pathOptions={{ color: '#ef4444', weight: 4, dashArray: '10, 10' }} 
+      {hoveredRec?.route_geojson && (
+        <GeoJSON 
+          key={`proposed-route-${Math.random()}`}
+          data={hoveredRec.route_geojson} 
+          style={{ color: '#ef4444', weight: 4, dashArray: '10, 10' }} 
         />
       )}
 
