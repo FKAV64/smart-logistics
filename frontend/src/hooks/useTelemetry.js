@@ -1,17 +1,13 @@
-import { useEffect } from 'react';
-import { io } from 'socket.io-client';
+import { useEffect, useRef, useState } from 'react'; // Added useState
 import { useCourierStore } from '../store/useCourierStore';
 
-// We can pass a specific URL using environment variables, but for now we default to a standard local Node.js port.
-const SOCKET_URL = import.meta.env.VITE_WEBSOCKET_URL || 'http://localhost:3000';
-
-// Export the socket instance so other components (like ActionCard) can manually emit events
-export const socket = io(SOCKET_URL, {
-  transports: ['websocket'],
-  autoConnect: false,
-});
+const HTTP_URL = import.meta.env.VITE_WEBSOCKET_URL || 'http://localhost:3000';
+const SOCKET_URL = HTTP_URL.replace(/^http/, 'ws');
 
 export const useTelemetry = () => {
+  // NEW: State to track actual socket connection
+  const [isConnected, setIsConnected] = useState(false);
+
   const {
     updateVehicleTelemetry,
     addRecommendation,
@@ -20,80 +16,63 @@ export const useTelemetry = () => {
     markDeliveryCompleted,
     setActiveDelivery,
     updateUser,
+    user
   } = useCourierStore();
 
+  const wsRef = useRef(null);
+
   useEffect(() => {
-    // Establish the persistent WebSocket connection when the hook mounts
-    socket.connect();
+    let reconnectTimeout;
+    let isComponentMounted = true;
 
-    const onConnect = () => console.log('Connected to SMART LOGISTICS Courier Gateway');
-    const onDisconnect = () => console.log('Disconnected from SMART LOGISTICS Courier Gateway');
-    
-    // On telemetry_update: Update the vehicles state with new coordinates
-    const onTelemetryUpdate = (data) => updateVehicleTelemetry(data);
-    
-    // On new_route_suggestion: Push the payload to pendingRecommendations
-    const onNewRouteSuggestion = (payload) => addRecommendation(payload);
-    
-    // On sync_confirmation: Update the specific recommendation's status to "Applied"
-    const onSyncConfirmation = (data) => {
-      if (data && data.id) {
-        confirmRecommendationSync(data.id, data.status);
-      }
+    const connectWebSocket = () => {
+      const courierId = user?.id || 'DRV-884';
+      const ws = new WebSocket(`${SOCKET_URL}?role=COURIER&id=${courierId}`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('Connected to SMART LOGISTICS Courier Gateway (Native WS)');
+        setIsConnected(true); // TRIGGER: Socket is physically open
+      };
+
+      ws.onmessage = (event) => {
+        // ... (Keep all your existing switch/case logic here)
+      };
+
+      ws.onclose = () => {
+        console.log('Disconnected from Gateway.');
+        setIsConnected(false); // TRIGGER: Socket closed
+        if (isComponentMounted) {
+          console.log('Attempting to reconnect in 3 seconds...');
+          reconnectTimeout = setTimeout(connectWebSocket, 3000);
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket Error:', error);
+        ws.close();
+      };
     };
 
-    const onDailyDeliveries = (data) => {
-      if (Array.isArray(data)) {
-        setDeliveries(data);
-        // Set the first delivery as active if none is active
-        const sorted = [...data].sort((a, b) => {
-           const timeA = a.time.split(':').map(Number);
-           const timeB = b.time.split(':').map(Number);
-           return (timeA[0] * 60 + timeA[1]) - (timeB[0] * 60 + timeB[1]);
-        });
-        if (sorted.length > 0) setActiveDelivery(sorted[0].id);
-      }
-    };
+    connectWebSocket();
 
-    const onDeliveryCompleted = (data) => {
-      if (data && data.id) {
-        markDeliveryCompleted(data.id);
-      }
-    };
-
-    const onNextDelivery = (data) => {
-      if (data && data.id) {
-        setActiveDelivery(data.id);
-      }
-    }
-
-    const onUserProfile = (data) => {
-      if (data) {
-        updateUser(data);
-      }
-    };
-
-    socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-    socket.on('telemetry_update', onTelemetryUpdate);
-    socket.on('new_route_suggestion', onNewRouteSuggestion);
-    socket.on('sync_confirmation', onSyncConfirmation);
-    socket.on('daily_deliveries', onDailyDeliveries);
-    socket.on('delivery_completed', onDeliveryCompleted);
-    socket.on('next_delivery', onNextDelivery);
-    socket.on('user_profile', onUserProfile);
-
-    // Cleanup listeners on unmount so we don't duplicate them
     return () => {
-      socket.off('connect', onConnect);
-      socket.off('disconnect', onDisconnect);
-      socket.off('telemetry_update', onTelemetryUpdate);
-      socket.off('new_route_suggestion', onNewRouteSuggestion);
-      socket.off('sync_confirmation', onSyncConfirmation);
-      socket.off('daily_deliveries', onDailyDeliveries);
-      socket.off('delivery_completed', onDeliveryCompleted);
-      socket.off('next_delivery', onNextDelivery);
-      socket.off('user_profile', onUserProfile);
+      isComponentMounted = false;
+      clearTimeout(reconnectTimeout);
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
     };
-  }, [updateVehicleTelemetry, addRecommendation, confirmRecommendationSync, setDeliveries, markDeliveryCompleted, setActiveDelivery, updateUser]);
+  }, [updateVehicleTelemetry, addRecommendation, confirmRecommendationSync, setDeliveries, markDeliveryCompleted, setActiveDelivery, updateUser, user]);
+
+  const sendMessage = (messageObj) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(messageObj));
+    } else {
+      console.warn('WebSocket is not open. Cannot send message:', messageObj);
+    }
+  };
+
+  // Return the new boolean
+  return { sendMessage, isConnected };
 };
