@@ -23,13 +23,21 @@ services:
     ports:
       - "6379:6379"
 
+  tomtom-mock:
+    build:
+      context: ./simulator
+    container_name: smart_logistics_tomtom_mock
+    ports:
+      - "7777:7777"
+
   gateway:
-    build: 
+    build:
       context: ./gateway
     container_name: smart_logistics_gateway
     environment:
       POSTGRES_URI: postgresql://postgres:password@postgres:5432/smart_logistics
       REDIS_URL: redis://redis:6379
+      TOMTOM_MOCK_URL: http://tomtom-mock:7777
       PORT: 3000
     ports:
       - "3000:3000"
@@ -37,6 +45,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_started
+      tomtom-mock:
         condition: service_started
     command: npm start
 
@@ -47,10 +57,13 @@ services:
     environment:
       POSTGRES_URI: postgresql://postgres:password@postgres:5432/smart_logistics
       REDIS_URL: redis://redis:6379
+      TOMTOM_MOCK_URL: http://tomtom-mock:7777
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_started
+      tomtom-mock:
         condition: service_started
     command: npm run worker
 

@@ -5,11 +5,12 @@
   "main": "courier.js",
   "scripts": {
     "courier": "node courier.js",
-    "brain": "node brain.js",
-    "dispatcher": "node dispatcher.js"
+    "dispatcher": "node dispatcher.js",
+    "tomtom": "node tomtom-mock.js"
   },
   "dependencies": {
     "@turf/turf": "^6.5.0",
+    "express": "^4.19.2",
     "ioredis": "^5.3.2",
     "ws": "^8.16.0"
   }

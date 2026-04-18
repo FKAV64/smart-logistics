@@ -1,5 +1,14 @@
 {
-    "target": "delay_at_stop_min",
+    "delay_threshold_min": 10,
+    "time_buckets": [
+        "early_morning",
+        "morning_rush",
+        "midday",
+        "evening_rush",
+        "night"
+    ],
+    "target_regressor": "delay_at_stop_min",
+    "target_classifier": "delay_binary (1 if delay > threshold)",
     "expected_features": [
         "road_type",
         "vehicle_type",
@@ -29,12 +38,17 @@
             "package_weight_kg"
         ],
         "binary": [
-            "temperature_c",
-            "distance_from_prev_km",
-            "planned_travel_min",
-            "stop_sequence",
-            "package_weight_kg",
             "road_incident"
         ]
+    },
+    "metrics": {
+        "regressor": {
+            "MAE": 3.489,
+            "RMSE": 6.846,
+            "R2": 0.962
+        },
+        "classifier": {
+            "AUC_ROC": 0.998
+        }
     }
 }

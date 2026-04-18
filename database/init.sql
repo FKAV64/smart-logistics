@@ -112,18 +112,20 @@ CREATE TABLE traffic_snapshots (
 -- DOMAIN 5: GATEWAY VIEWS
 -- ==========================================
 CREATE OR REPLACE VIEW active_courier_stops AS
-SELECT 
-    ms.stop_id,
-    ccd.lat AS latitude,
-    ccd.lon AS longitude,
+SELECT
+    ms.stop_id::text AS stop_id,
+    ccd.lat          AS latitude,
+    ccd.lon          AS longitude,
     ms.delivery_order,
     ccd.window_start AS time_window_open,
-    ccd.window_end AS time_window_close,
+    ccd.window_end   AS time_window_close,
+    ccd.weight_kg    AS package_weight_kg,
+    dm.manifest_id,
     dm.courier_id,
     ms.delivery_status AS status
 FROM manifest_stops ms
-JOIN daily_manifest dm ON ms.manifest_id = dm.manifest_id
-JOIN client_commande_detail ccd ON ms.commande_id = ccd.commande_id;
+JOIN daily_manifest         dm  ON ms.manifest_id = dm.manifest_id
+JOIN client_commande_detail ccd ON ms.commande_id  = ccd.commande_id;
 
 -- ==========================================
 -- INITIAL MOCK DATA SEEDING (Sivas Coordinates)

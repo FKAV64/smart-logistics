@@ -68,58 +68,95 @@ app.post('/login', async (req, res) => {
 setupWebSocket(wss);
 
 // -------------------------------------------------------------
-// CRON JOBS (Environmental & Traffic Syncing)
+// CRON JOBS (Environmental & Traffic Syncing via TomTom Mock)
 // -------------------------------------------------------------
 
-// Traffic Snapshots: Run every 15 minutes
+const TOMTOM_URL = process.env.TOMTOM_MOCK_URL || 'http://localhost:7777';
+
+/** Fetch all road segments with their centroid coordinates */
+async function fetchSegments() {
+  const { rows } = await db.query(`
+    SELECT segment_id,
+           ST_Y(ST_Centroid(geom)) AS lat,
+           ST_X(ST_Centroid(geom)) AS lon
+    FROM segments
+  `);
+  return rows;
+}
+
+// Traffic Snapshots: every 15 minutes
 cron.schedule('*/15 * * * *', async () => {
-  console.log('[CRON] Running Traffic Snapshots Sync...');
+  console.log('[CRON] Traffic Snapshots Sync via TomTom Mock...');
   try {
-    // In a real scenario, this would fetch from a Map API (Google Maps, Mapbox, etc.)
-    // We mock fetching "macro_traffic_speed" for segment_id=1
-    const mockMacroSpeed = Math.random() * (60 - 10) + 10; // Between 10 and 60 km/h
+    const segments = await fetchSegments();
+    const ts = new Date().toISOString();
 
-    await db.query(
-      `INSERT INTO traffic_snapshots (segment_id, timestamp, macro_traffic_speed)
-       VALUES ($1, $2, $3)`,
-      [1, new Date().toISOString(), mockMacroSpeed]
-    );
+    for (const seg of segments) {
+      const res  = await fetch(
+        `${TOMTOM_URL}/traffic/services/4/flowSegmentData/absolute/10/json?point=${seg.lat},${seg.lon}&key=mock`
+      );
+      const data = await res.json();
+      const { currentSpeed, roadClosure } = data.flowSegmentData;
 
-    // CRITICAL AI DEPENDENCY: update Redis
-    await pubClient.publish('traffic_updates', JSON.stringify({
-      segment_id: 1,
-      timestamp: new Date().toISOString(),
-      macro_traffic_speed: mockMacroSpeed
-    }));
+      const traffic_level =
+        currentSpeed > 50 ? 'LIGHT'    :
+        currentSpeed >= 30 ? 'MODERATE' :
+        currentSpeed >= 10 ? 'HEAVY'    : 'GRIDLOCK';
+
+      await db.query(
+        `INSERT INTO traffic_snapshots (segment_id, timestamp, traffic_level, incident_reported)
+         VALUES ($1, $2, $3, $4)`,
+        [seg.segment_id, ts, traffic_level, roadClosure]
+      );
+
+      await pubClient.publish('traffic_updates', JSON.stringify({
+        segment_id:        seg.segment_id,
+        timestamp:         ts,
+        traffic_level,
+        incident_reported: roadClosure,
+        current_speed_kmh: currentSpeed,
+      }));
+    }
+
+    console.log(`[CRON] Traffic snapshots written for ${segments.length} segment(s)`);
   } catch (err) {
-    console.error('[CRON] Error syncing traffic:', err);
+    console.error('[CRON] Traffic sync error:', err.message);
   }
 });
 
-// Environmental Snapshots: Run every 60 minutes
+// Environmental Snapshots: every hour
 cron.schedule('0 * * * *', async () => {
-  console.log('[CRON] Running Environmental Snapshots Sync...');
+  console.log('[CRON] Environmental Snapshots Sync via TomTom Mock...');
   try {
-    // Mock weather fetch
-    const temp = Math.random() * (35 + 5) - 5; // -5 to 35 C
-    const conditions = ['NORMAL', 'WET', 'FLOODED', 'ICE', 'CONSTRUCTION', 'CLOSED'];
-    const condition = conditions[Math.floor(Math.random() * conditions.length)];
+    const segments = await fetchSegments();
+    if (segments.length === 0) return;
 
-    await db.query(
-      `INSERT INTO environmental_snapshots (segment_id, timestamp, temperature, precipitation, wind, road_condition)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [1, new Date().toISOString(), temp, 0, 10, condition]
+    // Weather is area-wide — one API call using the first segment's coords
+    const { lat, lon } = segments[0];
+    const res  = await fetch(
+      `${TOMTOM_URL}/weather/1/currentConditions/json?q=${lat},${lon}&key=mock`
     );
+    const { currentConditions } = await res.json();
+    const { temperature_c, weather_condition } = currentConditions;
+    const ts = new Date().toISOString();
 
-    // CRITICAL AI DEPENDENCY: update Redis
+    for (const seg of segments) {
+      await db.query(
+        `INSERT INTO environmental_snapshots (segment_id, timestamp, temperature_c, weather_condition)
+         VALUES ($1, $2, $3, $4)`,
+        [seg.segment_id, ts, temperature_c, weather_condition]
+      );
+    }
+
     await pubClient.publish('environmental_updates', JSON.stringify({
-      segment_id: 1,
-      timestamp: new Date().toISOString(),
-      temperature: temp,
-      road_condition: condition
+      timestamp: ts,
+      temperature_c,
+      weather_condition,
     }));
+
+    console.log(`[CRON] Environmental snapshots written for ${segments.length} segment(s) — ${weather_condition} ${temperature_c}°C`);
   } catch (err) {
-    console.error('[CRON] Error syncing environmental data:', err);
+    console.error('[CRON] Environmental sync error:', err.message);
   }
 });
 

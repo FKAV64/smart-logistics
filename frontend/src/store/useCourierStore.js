@@ -42,8 +42,22 @@ export const useCourierStore = create((set) => ({
       const filtered = state.pendingRecommendations.filter(
         (rec) => rec.vehicleId !== suggestionPayload.vehicleId
       );
+
+      // Reorder the delivery list if Brain provided an optimized sequence
+      let deliveries = state.deliveries;
+      if (suggestionPayload.new_sequence?.length > 0) {
+        const orderMap = {};
+        suggestionPayload.new_sequence.forEach((stopId, idx) => {
+          orderMap[String(stopId)] = idx;
+        });
+        deliveries = [...state.deliveries].sort((a, b) =>
+          (orderMap[String(a.id)] ?? 999) - (orderMap[String(b.id)] ?? 999)
+        );
+      }
+
       return {
-        pendingRecommendations: [...filtered, suggestionPayload],
+        deliveries,
+        pendingRecommendations: [...filtered, { ...suggestionPayload, status: 'pending' }],
       };
     }),
 
