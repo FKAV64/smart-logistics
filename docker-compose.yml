@@ -77,5 +77,8 @@ services:
       VITE_API_URL: http://localhost:3000
     ports:
       - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
     depends_on:
       - gateway

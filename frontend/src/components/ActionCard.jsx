@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useCourierStore } from '../store/useCourierStore';
-import { socket } from '../hooks/useTelemetry';
+import { useTelemetry } from '../hooks/useTelemetry';
 import { Clock, AlertTriangle, Route as RouteIcon, CheckCircle, RotateCw, Phone, Mail } from 'lucide-react';
 import './ActionCard.css';
 
@@ -15,6 +15,8 @@ const ActionCard = ({ recommendation }) => {
     status, 
     estimatedViolationTime 
   } = recommendation;
+
+  const { sendMessage } = useTelemetry();
 
   const { setHoveredRecommendation, setRecommendationSyncing, removeRecommendation, vehicles } = useCourierStore();
   
@@ -54,13 +56,13 @@ const ActionCard = ({ recommendation }) => {
   const handleApprove = () => {
     if (status) return; 
     setRecommendationSyncing(id);
-    socket.emit('approve_route', { id });
+    sendMessage({ type: 'APPROVE_ROUTE', payload: { id } });
   };
 
   const handleRefuse = () => {
     if (status) return; 
     setRecommendationSyncing(id); 
-    socket.emit('refuse_route', { id });
+    sendMessage({ type: 'REFUSE_ROUTE', payload: { id } });
   };
 
   const getStatusClass = () => {
@@ -126,7 +128,7 @@ const ActionCard = ({ recommendation }) => {
             onClick={() => {
               if (status) return;
               setRecommendationSyncing(id);
-              socket.emit('send_email', { id, vehicleId });
+              sendMessage({ type: 'SEND_EMAIL', payload: { id, vehicleId } });
             }}
             disabled={!!status}
           >
