@@ -5,15 +5,15 @@ import { Lock, User, Truck, ShieldAlert } from 'lucide-react';
 import './LoginPage.css';
 
 const LoginPage = () => {
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const login = useCourierStore((state) => state.login);
   const navigate = useNavigate();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const result = login(username, password);
+    const result = await login(email, password);
     if (result.success) {
       if (result.role === 'admin') {
         navigate('/admin');
@@ -47,9 +47,9 @@ const LoginPage = () => {
             <User size={18} className="input-icon" />
             <input 
               type="text" 
-              placeholder="Username" 
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Email or 'admin'" 
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               required
             />
           </div>

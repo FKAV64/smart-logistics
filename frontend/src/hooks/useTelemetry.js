@@ -26,17 +26,61 @@ export const useTelemetry = () => {
     let isComponentMounted = true;
 
     const connectWebSocket = () => {
-      const courierId = user?.id || 'DRV-884';
-      const ws = new WebSocket(`${SOCKET_URL}?role=COURIER&id=${courierId}`);
+      const token = localStorage.getItem('token');
+
+      // Use JWT token if available (authenticated courier), else fall back to role+id (admin)
+      const wsUrl = token
+        ? `${SOCKET_URL}?token=${encodeURIComponent(token)}`
+        : `${SOCKET_URL}?role=COURIER&id=${user?.id || 'DRV-884'}`;
+
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log('Connected to SMART LOGISTICS Courier Gateway (Native WS)');
-        setIsConnected(true); // TRIGGER: Socket is physically open
+        console.log('Connected to SMART LOGISTICS Gateway (JWT Auth)');
+        setIsConnected(true);
       };
 
       ws.onmessage = (event) => {
-        // ... (Keep all your existing switch/case logic here)
+        try {
+          const data = JSON.parse(event.data);
+          switch (data.type) {
+            case 'DAILY_MANIFEST_LOADED': {
+              // Normalise DB rows → delivery card format
+              const deliveries = data.payload.stops.map((stop) => ({
+                id: `STOP-${stop.stop_id}`,
+                lat: stop.latitude,
+                lng: stop.longitude,
+                time: stop.time_window_open
+                  ? new Date(stop.time_window_open).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : '--:--',
+                destination: `Stop #${stop.delivery_order} (${stop.latitude.toFixed(4)}, ${stop.longitude.toFixed(4)})`,
+                clientNumber: '',
+                urgency: stop.delivery_order,
+              }));
+              setDeliveries(deliveries);
+              break;
+            }
+            case 'VEHICLE_TELEMETRY':
+              updateVehicleTelemetry(data.payload);
+              break;
+            case 'AI_ROUTE_RECOMMENDATION':
+              addRecommendation(data.payload);
+              break;
+            case 'ROUTE_SYNC_CONFIRMED':
+              confirmRecommendationSync(data.payload.id, data.payload.status);
+              break;
+            case 'DELIVERY_COMPLETED':
+              markDeliveryCompleted(data.payload.deliveryId);
+              break;
+            case 'ACTIVE_ROUTE_UPDATE':
+              break;
+            default:
+              console.log('[WS] Unhandled message type:', data.type);
+          }
+        } catch (err) {
+          console.error('Failed to parse WebSocket message:', err);
+        }
       };
 
       ws.onclose = () => {

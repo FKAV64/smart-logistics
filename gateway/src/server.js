@@ -3,6 +3,9 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const cron = require('node-cron');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const db = require('./db');
 const { pubClient } = require('./redisClient');
 const { setupWebSocket } = require('./wsHandler');
@@ -12,10 +15,53 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
+app.use(cors());
+
+const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey_hackathon_only';
 
 // Basic healthcheck
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', role: 'Gateway' });
+});
+
+// Authentication Endpoint
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ success: false, message: 'Email and password required' });
+
+  try {
+    const { rows } = await db.query('SELECT courier_id, first_name, last_name, email, password, vehicle_type FROM couriers WHERE email = $1', [email]);
+    if (rows.length === 0) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+
+    const user = rows[0];
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+
+    const token = jwt.sign(
+      { 
+        courierId: user.courier_id, 
+        role: 'courier', 
+        vehicleType: user.vehicle_type 
+      }, 
+      JWT_SECRET, 
+      { expiresIn: '12h' }
+    );
+
+    res.json({ 
+      success: true, 
+      token, 
+      role: 'courier',
+      user: {
+        id: user.courier_id,
+        name: `${user.first_name} ${user.last_name}`,
+        email: user.email,
+        vehicleType: user.vehicle_type
+      }
+    });
+  } catch (err) {
+    console.error('Login error', err);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
 });
 
 // Attach WebSockets

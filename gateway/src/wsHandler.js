@@ -1,6 +1,9 @@
 const turf = require('@turf/turf');
+const jwt = require('jsonwebtoken');
 const db = require('./db');
 const { pubClient, aiEvents } = require('./redisClient');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey_hackathon_only';
 
 const courierState = {};
 
@@ -18,7 +21,7 @@ function setupWebSocket(wss) {
         }
 
         // 2. COURIER ONLY gets their SPECIFIC GeoJSON update
-        if (client.role === 'COURIER' && client.courierId === data.courier_id) {
+        if (client.role === 'courier' && client.courierId === data.courier_id) {
           console.log(`Routing updated GeoJSON to Courier: ${client.courierId}`);
           client.send(JSON.stringify({
             type: 'ACTIVE_ROUTE_UPDATE',
@@ -31,12 +34,26 @@ function setupWebSocket(wss) {
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    const role = url.searchParams.get('role');
-    const courierId = url.searchParams.get('id');
+    const token = url.searchParams.get('token');
+    let role = url.searchParams.get('role'); // Fallback for Dispatcher if wanted
+    let courierId = url.searchParams.get('id');
+    let vehicleType = null;
 
-    Object.assign(ws, { role, courierId });
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        role = decoded.role;
+        courierId = decoded.courierId;
+        vehicleType = decoded.vehicleType;
+      } catch (err) {
+        console.error('Invalid WebSocket JWT Token');
+        return ws.close();
+      }
+    }
 
-    if (role === 'COURIER' && courierId) {
+    Object.assign(ws, { role, courierId, vehicleType });
+
+    if (role === 'courier' && courierId) {
       if (!courierState[courierId]) {
         courierState[courierId] = {
           lastPoint: null,
@@ -53,28 +70,34 @@ function setupWebSocket(wss) {
         // -------------------------------------------------------------
         // NEW: ROUTINE HEALTH CHECK (Triggered on Frontend Mount/Reconnect)
         // -------------------------------------------------------------
-        if (ws.role === 'COURIER' && data.type === 'GET_DAILY_MANIFEST') {
+        if (ws.role === 'courier' && data.type === 'GET_DAILY_MANIFEST') {
           console.log(`[HEALTH CHECK] Fetching unvisited stops for: ${ws.courierId}`);
 
           try {
-            // Fetch unvisited stops. (Adjust table names to your exact schema if needed)
             const result = await db.query(
               `SELECT stop_id, latitude, longitude, delivery_order, time_window_open, time_window_close 
-               FROM manifest_stops 
+               FROM active_courier_stops 
                WHERE courier_id = $1 AND status = 'PENDING'
                ORDER BY delivery_order ASC`,
               [ws.courierId]
             );
 
-            // Format the payload for the Python Brain
+            // 1. Send stops DIRECTLY back to frontend immediately
+            ws.send(JSON.stringify({
+              type: 'DAILY_MANIFEST_LOADED',
+              payload: { stops: result.rows }
+            }));
+            console.log(`[HEALTH CHECK] Manifest sent to courier frontend (${result.rows.length} stops)`);
+
+            // 2. Also forward to Python Brain via Redis for route optimisation
             const trafficAlertPayload = {
               event: 'ROUTINE_HEALTH_CHECK',
               courier_id: ws.courierId,
+              vehicle_type: ws.vehicleType,
               timestamp: new Date().toISOString(),
               unvisited_stops: result.rows
             };
 
-            // Publish to Redis for Python to pick up and calculate the GeoJSON
             await pubClient.publish('route_optimization_channel', JSON.stringify(trafficAlertPayload));
             console.log(`[HEALTH CHECK] Data pushed to Python Brain for ${ws.courierId}`);
 
@@ -86,7 +109,7 @@ function setupWebSocket(wss) {
         // -------------------------------------------------------------
         // EXISTING: COURIER LOGIC (Distance Accumulation & Traffic Alerts)
         // -------------------------------------------------------------
-        if (ws.role === 'COURIER' && data.type === 'GPS_PING') {
+        if (ws.role === 'courier' && data.type === 'GPS_PING') {
           const state = courierState[ws.courierId];
           const currentPoint = turf.point([data.lon, data.lat]);
 
@@ -120,6 +143,7 @@ function setupWebSocket(wss) {
                 await pubClient.publish('traffic_alerts_channel', JSON.stringify({
                   event: 'TRAFFIC_JAM_DETECTED',
                   courier_id: ws.courierId,
+                  vehicle_type: ws.vehicleType,
                   lat: data.lat,
                   lon: data.lon,
                   avg_speed: avgSpeed,

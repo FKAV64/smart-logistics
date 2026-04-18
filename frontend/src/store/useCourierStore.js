@@ -8,14 +8,7 @@ export const useCourierStore = create((set) => ({
   isOnBreak: false, 
   user: null, // { id: 'admin', role: 'admin', name: 'Admin User', profileImage: null }
   isAuthenticated: false,
-  deliveries: [
-    { id: 'D001', time: '14:30', destination: 'Sivas Main Blvd, No: 42', clientNumber: '+90 555 001 1122', urgency: 1 },
-    { id: 'D002', time: '15:15', destination: 'Emniyet Cd., Sivas Central', clientNumber: '+90 555 002 2233', urgency: 2 },
-    { id: 'D003', time: '16:00', destination: 'Cumhuriyet Sq, Market Street', clientNumber: '+90 555 003 3344', urgency: 3 },
-    { id: 'D004', time: '16:45', destination: 'Atatürk Blvd, High School Area', clientNumber: '+90 555 004 4455', urgency: 1 },
-    { id: 'D005', time: '17:30', destination: 'İnönü Cd., Hospital District', clientNumber: '+90 555 005 5566', urgency: 2 },
-    { id: 'D006', time: '18:15', destination: 'Fevzi Çakmak Cd., Sivas Mall', clientNumber: '+90 555 006 6677', urgency: 3 },
-  ],
+  deliveries: [], // Populated via DAILY_MANIFEST_LOADED WebSocket event on login
   activeDeliveryId: null,
   completedDeliveryIds: [],
 
@@ -117,16 +110,33 @@ export const useCourierStore = create((set) => ({
   toggleBreak: () => set((state) => ({ isOnBreak: !state.isOnBreak })),
 
   // Auth Actions
-  login: (username, password) => {
-    // Simple mock authentication logic
-    if (username === 'admin' && password === 'admin123') {
+  login: async (email, password) => {
+    if (email === 'admin' && password === 'admin123') {
       set({ user: { id: 'admin', role: 'admin', name: 'System Admin', profileImage: null }, isAuthenticated: true });
       return { success: true, role: 'admin' };
-    } else if (username === 'courier' && password === 'password') {
-      set({ user: { id: 'D01', role: 'courier', name: 'John Sivas', profileImage: null }, isAuthenticated: true });
-      return { success: true, role: 'courier' };
     }
-    return { success: false, message: 'Invalid credentials' };
+
+    try {
+      const res = await fetch('http://localhost:3000/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        return { success: false, message: data.message || 'Login failed' };
+      }
+
+      localStorage.setItem('token', data.token);
+      set({ user: data.user, isAuthenticated: true });
+      return { success: true, role: data.role };
+    } catch (err) {
+      return { success: false, message: 'Network Error' };
+    }
   },
 
   updateProfileImage: (imageData) => 
@@ -149,5 +159,8 @@ export const useCourierStore = create((set) => ({
       user: state.user ? { ...state.user, ...userData } : userData
     })),
 
-  logout: () => set({ user: null, isAuthenticated: false }),
+  logout: () => {
+    localStorage.removeItem('token');
+    set({ user: null, isAuthenticated: false });
+  },
 }));
