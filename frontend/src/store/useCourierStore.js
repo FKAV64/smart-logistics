@@ -1,28 +1,20 @@
 import { create } from 'zustand';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+
 export const useCourierStore = create((set) => ({
   vehicles: [], // Array of objects (id, lat, lng, speed, lastPingTimestamp)
   activeRoutes: [], // Array of GeoJSON objects representing the current path for each vehicle
   pendingRecommendations: [], // Array of actionable alerts sent by the AI
   hoveredRecommendationId: null, // Track hovered alert to show proposed route
   isOnBreak: false,
-  user: null, // { id: 'admin', role: 'admin', name: 'Admin User', profileImage: null }
+  user: null, // { id: 'D01', name: 'John Doe', profileImage: null }
   isAuthenticated: false,
   deliveries: [], // Populated via DAILY_MANIFEST_LOADED WebSocket event on login
   activeDeliveryId: null,
   completedDeliveryIds: [],
 
-  // Admin Data
-  couriers: [
-    { id: 'D01', name: 'John Sivas', phone: '+90 555 123 4567', vehicleId: 'vehicle-1' },
-    { id: 'D02', name: 'Ayşe Kaya', phone: '+90 555 987 6543', vehicleId: 'vehicle-2' },
-    { id: 'D03', name: 'Mehmet Demir', phone: '+90 555 456 7890', vehicleId: 'vehicle-3' }
-  ],
-  stats: {
-    totalActiveVehicles: 15,
-    solvedAlertsToday: 42,
-    systemPerformance: '98.5%'
-  },
+
 
 
   // Actions
@@ -83,24 +75,7 @@ export const useCourierStore = create((set) => ({
       pendingRecommendations: state.pendingRecommendations.filter((rec) => rec.id !== id),
     })),
 
-  // Courier Management Actions
-  addCourier: (newCourier) =>
-    set((state) => ({
-      couriers: [newCourier, ...state.couriers],
-      stats: {
-        ...state.stats,
-        totalActiveVehicles: state.stats.totalActiveVehicles + 1
-      }
-    })),
 
-  deleteCourier: (id) =>
-    set((state) => ({
-      couriers: state.couriers.filter(d => d.id !== id),
-      stats: {
-        ...state.stats,
-        totalActiveVehicles: Math.max(0, state.stats.totalActiveVehicles - 1)
-      }
-    })),
 
   setActiveRoutes: (routes) => set({ activeRoutes: routes }),
 
@@ -111,13 +86,9 @@ export const useCourierStore = create((set) => ({
 
   // Auth Actions
   login: async (email, password) => {
-    if (email === 'admin' && password === 'admin123') {
-      set({ user: { id: 'admin', role: 'admin', name: 'System Admin', profileImage: null }, isAuthenticated: true });
-      return { success: true, role: 'admin' };
-    }
 
-    try {
-      const res = await fetch('http://localhost:3000/login', {
+
+      const res = await fetch(`${API_BASE_URL}/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -133,12 +104,8 @@ export const useCourierStore = create((set) => ({
 
       localStorage.setItem('token', data.token);
 
-      // Default to 'courier' since roles are no longer in the DB
-      const assignedRole = data.role || (data.user && data.user.role) || 'courier';
-      const completeUser = { ...data.user, role: assignedRole };
-
-      set({ user: completeUser, isAuthenticated: true });
-      return { success: true, role: assignedRole };
+      set({ user: data.user, isAuthenticated: true });
+      return { success: true };
 
     } catch (err) {
       return { success: false, message: 'Network Error' };

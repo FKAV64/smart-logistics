@@ -25,13 +25,12 @@ const CourierDashboard = () => {
   // ROUTINE HEALTH CHECK: Fetch manifest when socket securely opens
   useEffect(() => {
     // Only fire if the socket has explicitly triggered ws.onopen
-    if (isConnected) {
-      const courierId = user?.id || 'DRV-884'; // Fallback for MVP testing
-      console.log(`Connection established. Requesting manifest for: ${courierId}`);
+    if (isConnected && user?.id) {
+      console.log(`Connection established. Requesting manifest for: ${user.id}`);
 
       sendMessage({
         type: 'GET_DAILY_MANIFEST',
-        courierId: courierId
+        courierId: user.id
       });
     }
   }, [isConnected, user, sendMessage]);

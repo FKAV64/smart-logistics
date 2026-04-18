@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'; // Added useState
 import { useCourierStore } from '../store/useCourierStore';
 
-const HTTP_URL = import.meta.env.VITE_WEBSOCKET_URL || 'http://localhost:3000';
-const SOCKET_URL = HTTP_URL.replace(/^http/, 'ws');
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+const SOCKET_URL = API_BASE_URL.replace(/^http/, 'ws');
 
 export const useTelemetry = () => {
   // NEW: State to track actual socket connection
@@ -18,7 +18,8 @@ export const useTelemetry = () => {
     updateUser,
     user
   } = useCourierStore();
-
+  
+  const userId = user?.id;
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -31,7 +32,7 @@ export const useTelemetry = () => {
       // Use JWT token if available (authenticated courier), else fall back to role+id (admin)
       const wsUrl = token
         ? `${SOCKET_URL}?token=${encodeURIComponent(token)}`
-        : `${SOCKET_URL}?role=COURIER&id=${user?.id || 'DRV-884'}`;
+        : `${SOCKET_URL}?id=${userId}`;
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -107,7 +108,7 @@ export const useTelemetry = () => {
         wsRef.current.close();
       }
     };
-  }, [updateVehicleTelemetry, addRecommendation, confirmRecommendationSync, setDeliveries, markDeliveryCompleted, setActiveDelivery, updateUser, user]);
+  }, [userId, updateVehicleTelemetry, addRecommendation, confirmRecommendationSync, setDeliveries, markDeliveryCompleted, setActiveDelivery, updateUser]);
 
   const sendMessage = (messageObj) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

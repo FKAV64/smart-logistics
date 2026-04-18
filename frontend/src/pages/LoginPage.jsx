@@ -15,11 +15,7 @@ const LoginPage = () => {
     e.preventDefault();
     const result = await login(email, password);
     if (result.success) {
-      if (result.role === 'admin') {
-        navigate('/admin');
-      } else {
-        navigate('/courier');
-      }
+      navigate('/courier');
     } else {
       setError(result.message);
     }
@@ -39,7 +35,7 @@ const LoginPage = () => {
             <Truck size={40} className="logo-icon" />
           </div>
           <h2>Smart Logistics</h2>
-          <p>Courier & Admin Portal</p>
+          <p>Courier Portal</p>
         </div>
 
         <form onSubmit={handleSubmit} className="login-form">
@@ -47,7 +43,7 @@ const LoginPage = () => {
             <User size={18} className="input-icon" />
             <input 
               type="text" 
-              placeholder="Email or 'admin'" 
+              placeholder="Email" 
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
