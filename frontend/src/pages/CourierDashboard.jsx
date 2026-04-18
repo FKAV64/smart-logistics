@@ -40,7 +40,7 @@ const CourierDashboard = () => {
     logout();
     navigate('/login');
   };
-
+  console.log("CourierDashboard mounted!"); // Check if this prints in the console
   return (
     <div className="courier-page">
       {/* Background Map */}

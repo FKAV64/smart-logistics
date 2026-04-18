@@ -5,7 +5,7 @@ export const useCourierStore = create((set) => ({
   activeRoutes: [], // Array of GeoJSON objects representing the current path for each vehicle
   pendingRecommendations: [], // Array of actionable alerts sent by the AI
   hoveredRecommendationId: null, // Track hovered alert to show proposed route
-  isOnBreak: false, 
+  isOnBreak: false,
   user: null, // { id: 'admin', role: 'admin', name: 'Admin User', profileImage: null }
   isAuthenticated: false,
   deliveries: [], // Populated via DAILY_MANIFEST_LOADED WebSocket event on login
@@ -84,7 +84,7 @@ export const useCourierStore = create((set) => ({
     })),
 
   // Courier Management Actions
-  addCourier: (newCourier) => 
+  addCourier: (newCourier) =>
     set((state) => ({
       couriers: [newCourier, ...state.couriers],
       stats: {
@@ -132,14 +132,20 @@ export const useCourierStore = create((set) => ({
       }
 
       localStorage.setItem('token', data.token);
-      set({ user: data.user, isAuthenticated: true });
-      return { success: true, role: data.role };
+
+      // Default to 'courier' since roles are no longer in the DB
+      const assignedRole = data.role || (data.user && data.user.role) || 'courier';
+      const completeUser = { ...data.user, role: assignedRole };
+
+      set({ user: completeUser, isAuthenticated: true });
+      return { success: true, role: assignedRole };
+
     } catch (err) {
       return { success: false, message: 'Network Error' };
     }
   },
 
-  updateProfileImage: (imageData) => 
+  updateProfileImage: (imageData) =>
     set((state) => ({
       user: state.user ? { ...state.user, profileImage: imageData } : null
     })),
