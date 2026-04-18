@@ -54,9 +54,18 @@ const ActionCard = ({ recommendation }) => {
   }, [status, id, removeRecommendation]);
 
   const handleApprove = () => {
-    if (status) return; 
+    if (status) return;
     setRecommendationSyncing(id);
-    sendMessage({ type: 'APPROVE_ROUTE', payload: { id } });
+    sendMessage({
+      type: 'APPROVE_ROUTE',
+      payload: {
+        routeId: recommendation.manifest_id,
+        recommendedStopsOrder: (recommendation.new_sequence || []).map((stopId, idx) => ({
+          stop_id: String(stopId),
+          stop_order: idx + 1,
+        })),
+      },
+    });
   };
 
   const handleRefuse = () => {
