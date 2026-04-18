@@ -53,3 +53,29 @@ services:
       redis:
         condition: service_started
     command: npm run worker
+
+  brain:
+    build:
+      context: ./brain
+    container_name: smart_logistics_brain
+    environment:
+      ENVIRONMENT: dev
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: smart_logistics_frontend
+    environment:
+      VITE_API_URL: http://localhost:3000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - gateway
