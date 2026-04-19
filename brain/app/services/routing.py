@@ -65,7 +65,7 @@ class RouteOptimizer:
                 wait_time = (window_start - current_time).total_seconds() / 60.0
                 current_time = window_start
                 total_cost_minutes += wait_time
-             # Service time is fixed at 13 minutes for now(from route_stops.csv)
+            # 13 min average service time derived from route_stops.csv dataset
             service_min = 13.0
             current_time += timedelta(minutes=service_min)
             
@@ -93,7 +93,7 @@ class RouteOptimizer:
     def optimize_route(self, unvisited_stops: list, scored_graph: nx.DiGraph, current_time_iso: str):
         if len(unvisited_stops) <= 1:
             return {
-                "action_type": "CONTINUE",
+                "is_reordered":    False,
                 "new_sequence_ids": [s['stop_id'] for s in unvisited_stops],
                 "time_saved": 0,
                 "max_delay": 0,

@@ -34,14 +34,11 @@ def seed_map_if_empty():
             conn.close()
             return
             
-        # Download the drivable network for Sivas city center only using a tight bounding box.
-        # bbox format: (north, south, east, west)
-        # This focuses on the urban core around 39.75N, 37.02E — avoids the massive province download.
-        G = ox.graph_from_bbox(
-            north=39.800, south=39.710,
-            east=37.080,  west=36.960,
-            network_type='drive'
-        )
+        # Download the full drivable road network for Sivas city using the official
+        # administrative boundary from OpenStreetMap. This covers the complete urban
+        # geography that the ML model was trained on, including all districts and
+        # peripheral roads — not just the tight urban core.
+        G = ox.graph_from_place("Sivas, Turkey", network_type='drive')
         
         # Convert the structural graph into usable GeoDataFrames
         nodes, edges = ox.graph_to_gdfs(G)

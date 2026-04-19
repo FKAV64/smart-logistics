@@ -69,7 +69,7 @@ class RedisWorker:
 
             # Compute per-stop delay probabilities
             stop_probs = self.ml_engine.predict_stop_probabilities(
-                unvisited_stops, message_data
+                unvisited_stops, message_data, self.map_engine.get_graph()
             )
 
             # Score the street graph with XGBoost delay weights

@@ -55,6 +55,27 @@ class MLEngine:
              math.sin(dlon / 2) ** 2)
         return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
+    def _road_distance_km(self, graph, lat1, lon1, lat2, lon2) -> float:
+        """
+        Returns the actual road network distance between two GPS points by
+        snapping them to the nearest graph nodes and running Dijkstra on
+        the physical edge distances. Falls back to haversine if unreachable.
+        """
+        if graph is None or len(graph.nodes) == 0:
+            return self._haversine_distance(lat1, lon1, lat2, lon2)
+
+        start_node = min(graph.nodes(), key=lambda n: (n[0] - lon1) ** 2 + (n[1] - lat1) ** 2)
+        end_node   = min(graph.nodes(), key=lambda n: (n[0] - lon2) ** 2 + (n[1] - lat2) ** 2)
+
+        if start_node == end_node:
+            return 0.0
+
+        try:
+            path = nx.shortest_path(graph, source=start_node, target=end_node, weight='distance_km')
+            return sum(graph[path[i]][path[i + 1]]['distance_km'] for i in range(len(path) - 1))
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return self._haversine_distance(lat1, lon1, lat2, lon2)
+
     def _safe_get(self, value, category: str) -> str:
         return value if value in self.VALID_CATEGORIES[category] else self.DEFAULTS[category]
 
@@ -118,10 +139,11 @@ class MLEngine:
 
         return scored_graph
 
-    def predict_stop_probabilities(self, stops: list, payload: dict) -> dict:
+    def predict_stop_probabilities(self, stops: list, payload: dict, map_graph=None) -> dict:
         """
         Returns {stop_id: delay_probability (0-1)} for each unvisited stop.
         Uses the binary XGBoost classifier trained with threshold = 10 min.
+        Uses actual road network distance when map_graph is provided.
         """
         if not stops:
             return {}
@@ -133,7 +155,8 @@ class MLEngine:
         rows = []
         for i, stop in enumerate(stops):
             prev      = stops[i - 1] if i > 0 else stop
-            dist_km   = self._haversine_distance(
+            dist_km   = self._road_distance_km(
+                map_graph,
                 float(prev.get('lat', stop['lat'])), float(prev.get('lon', stop['lon'])),
                 float(stop['lat']),                  float(stop['lon'])
             )

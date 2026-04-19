@@ -1,172 +1,267 @@
-# 🧠 Smart Logistics — The Brain
+# Smart Logistics — The Brain
 
-The **Brain** is the Python-powered AI engine at the heart of the Smart Logistics platform. It is a real-time route optimization and delay prediction service that lives **entirely inside the backend**. It is never exposed directly to the internet — all communication passes through the Node.js API Gateway via **Redis Pub/Sub channels**.
+The **Brain** is the Python-powered AI engine at the heart of the Smart Logistics platform. It is a real-time route optimization and delay prediction service that operates entirely within the backend — never exposed directly to clients. All communication passes through the Node.js API Gateway via **Redis Pub/Sub channels**.
 
 ---
 
 ## Table of Contents
-1. [How It Works — System Overview](#how-it-works--system-overview)
-2. [Event Types](#event-types)
-3. [Decision Outcomes](#decision-outcomes)
-4. [ML Feature Contract](#ml-feature-contract)
-5. [Data Flow (Step by Step)](#data-flow-step-by-step)
-6. [Folder Structure](#folder-structure)
-7. [File Reference](#file-reference)
-8. [Running Locally](#running-locally)
-9. [Environment Variables](#environment-variables)
+
+1. [System Architecture](#system-architecture)
+2. [AI Pipeline (Step by Step)](#ai-pipeline-step-by-step)
+3. [Event Types](#event-types)
+4. [Decision Outcomes](#decision-outcomes)
+5. [ML Models](#ml-models)
+6. [Design Assumptions](#design-assumptions)
+7. [City Road Network](#city-road-network)
+8. [Folder Structure](#folder-structure)
+9. [File Reference](#file-reference)
+10. [Environment Variables](#environment-variables)
+11. [Redis Channels](#redis-channels)
+12. [Running Locally](#running-locally)
 
 ---
 
-## How It Works — System Overview
+## System Architecture
 
 ```
-┌────────────────────────────────────────────────────┐
-│                  NODE.JS GATEWAY                   │
-│  Receives GPS pings from truck, gets TomTom alerts │
-└───────────────────────┬────────────────────────────┘
-                        │  JSON Payload
-                        ▼
-              [Redis: traffic_alerts_channel]
-                        │
-                        ▼
-┌────────────────────────────────────────────────────┐
-│                 PYTHON BRAIN (This Service)        │
-│                                                    │
-│  1. Pydantic validates the incoming payload        │
-│  2. MLEngine builds GPS-based adjacency matrix     │
-│  3. XGBoost predicts delay for every stop pair     │
-│  4. RouteOptimizer Hill-Climbs to find best order  │
-│  5. Decision engine selects one of 5 actions       │
-└───────────────────────┬────────────────────────────┘
-                        │  JSON Response
-                        ▼
-          [Redis: route_optimizations_channel]
-                        │
-                        ▼
-┌────────────────────────────────────────────────────┐
-│                  NODE.JS GATEWAY                   │
-│  Dispatches action to driver's mobile app          │
-└────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│                   NODE.JS GATEWAY                     │
+│  Receives GPS pings from couriers, runs health checks │
+└──────────────────────────┬────────────────────────────┘
+                           │ JSON Payload
+                           ▼
+             [Redis: traffic_alerts_channel]
+                           │
+                           ▼
+┌───────────────────────────────────────────────────────┐
+│              PYTHON BRAIN  (This Service)             │
+│                                                       │
+│  1. Pydantic validates the incoming payload           │
+│  2. MapEngine provides the city road graph            │
+│  3. MLEngine scores every street edge (XGBoost)       │
+│  4. MLEngine predicts per-stop delay probabilities    │
+│  5. RouteOptimizer runs TSP hill-climbing (Dijkstra)  │
+│  6. Decision engine selects one of 5 actions          │
+└──────────────────────────┬────────────────────────────┘
+                           │ JSON Response
+                           ▼
+         [Redis: route_optimizations_channel]
+                           │
+                           ▼
+┌───────────────────────────────────────────────────────┐
+│                   NODE.JS GATEWAY                     │
+│  Forwards GeoJSON route + recommendation to courier   │
+└───────────────────────────────────────────────────────┘
 ```
 
-The Brain runs as a **FastAPI** web server. On startup, it spawns a background daemon thread that permanently listens to the Redis `traffic_alerts_channel`. Every incoming message triggers the full AI pipeline and the result is published back to Node.js on the `route_optimizations_channel`.
+The Brain runs as a **FastAPI** web server. On startup it:
+
+1. Seeds the PostGIS `segments` table with the full Sivas city road network (OSMnx) if empty.
+2. Loads the road graph into an in-memory NetworkX `DiGraph`.
+3. Loads both XGBoost models from disk.
+4. Spawns a **background daemon thread** that permanently listens on `traffic_alerts_channel`.
+
+Every incoming Redis message triggers the full AI pipeline and publishes a response to `route_optimizations_channel`.
+
+---
+
+## AI Pipeline (Step by Step)
+
+```
+1. Node.js publishes JSON → [traffic_alerts_channel]
+
+2. redis_worker.py receives the message
+   ├── Validates against TrafficAlertPayload (Pydantic)
+   └── Acquires a 10-second atomic de-bounce lock per manifest_id
+       (prevents duplicate processing on rapid-fire events)
+
+3. ml_engine.py → predict_stop_probabilities(stops, payload, map_graph)
+   ├── For each consecutive stop pair, computes ROAD NETWORK distance
+   │   by snapping coordinates to the nearest graph node and running
+   │   Dijkstra on physical edge distances (distance_km weights)
+   ├── Falls back to haversine only if the graph is empty or disconnected
+   ├── Derives planned_travel_min from road distance ÷ vehicle speed profile
+   └── XGBoost binary classifier → {stop_id: delay_probability (0–1)}
+
+4. ml_engine.py → predict_segment_delays(payload, map_graph)
+   ├── Iterates over every street edge in the NetworkX graph
+   ├── Computes base travel time from physical edge distance_km
+   └── XGBoost regressor → predicted_delay_min per edge
+       (edge 'weight' = planned_travel_min + predicted_delay_min)
+
+5. routing.py → optimize_route(stops, scored_graph, current_time_iso)
+   ├── Snaps each stop to its nearest road network node
+   ├── Evaluates original sequence via Dijkstra (AI-weighted edges)
+   ├── Runs 50-iteration randomized Hill-Climbing (swap two stops)
+   ├── Hard penalty +10,000 min for missed time windows
+   ├── Soft wait if courier arrives before window_start
+   ├── 13-minute service time added at each stop
+   └── Returns: best sequence, time_saved, max_delay, minutes_late,
+               route_health, route_geojson (MultiLineString GeoJSON Feature)
+
+6. redis_worker.py → Decision Engine
+   ├── health == "FAILED"          → NOTIFY_DISPATCH_LATE  (CRITICAL)
+   ├── is_reordered                → RE-ROUTE              (high)
+   ├── TRAFFIC_ALERT + AT_STOP     → DELAY_DEPARTURE        (medium)
+   ├── TRAFFIC_ALERT + EN_ROUTE    → REQUEST_ALTERNATE_PATH (medium)
+   └── Otherwise                   → CONTINUE               (low)
+
+7. Publishes JSON response → [route_optimizations_channel]
+   └── Gateway forwards AI_ROUTE_RECOMMENDATION + ACTIVE_ROUTE_UPDATE
+       (GeoJSON polyline) to the courier's WebSocket
+```
 
 ---
 
 ## Event Types
 
-Node.js sends one of two defined `event_type` values inside every payload:
-
-| Event Type | Trigger | Frequency |
-|---|---|---|
-| `ROUTINE_HEALTH_CHECK` | Scheduled cron job | Every 15 minutes |
-| `TRAFFIC_ALERT` | TomTom notifies Node.js of a live jam ahead of the truck | As they occur |
-
-The event type is the first variable the Decision Engine reads to determine the severity and physical nature of the recommended action.
+| Event Type | Trigger |
+|---|---|
+| `ROUTINE_HEALTH_CHECK` | Fired by the gateway immediately when a courier connects and requests their daily manifest |
+| `TRAFFIC_ALERT` | Fired when a courier's GPS speed drops below 10 km/h (gateway detects gridlock) |
 
 ---
 
 ## Decision Outcomes
 
-After the AI runs its full optimization pipeline, it selects exactly **one** of five possible actions to return to Node.js:
-
-| Action | Condition | Meaning |
+| Action | Condition | Severity |
 |---|---|---|
-| `CONTINUE` | Sequence is optimal, no traffic alert | Driver is on track. No changes needed. |
-| `RE-ROUTE` | A different stop order would save meaningful time | AI outputs a new stop sequence array for the driver's app. |
-| `DELAY_DEPARTURE` | `event_type = TRAFFIC_ALERT` AND `courier_status = AT_STOP` | Jam is ahead. Tell the driver to hold at the current stop for 15 mins rather than merge into gridlock. |
-| `REQUEST_ALTERNATE_PATH` | `event_type = TRAFFIC_ALERT` AND `courier_status = EN_ROUTE` | Stop sequence is fine. The literal road is blocked. Tell Node.js to call TomTom for an alternate physical GPS path. |
-| `NOTIFY_DISPATCH_LATE` | Even the best mathematical reordering guarantees a missed SLA window | Escalate to dispatch center with the exact number of minutes the driver will be late. |
+| `CONTINUE` | Sequence is mathematically optimal, no delays | `low` |
+| `RE-ROUTE` | A different stop order saves meaningful time | `high` |
+| `DELAY_DEPARTURE` | Traffic alert, courier is currently `AT_STOP` | `medium` |
+| `REQUEST_ALTERNATE_PATH` | Traffic alert, courier is `EN_ROUTE` | `medium` |
+| `NOTIFY_DISPATCH_LATE` | Mathematically impossible to meet all SLA windows | `CRITICAL` |
 
-### Response Payload (sent to Node.js)
+### Response Payload (published to Node.js)
+
 ```json
 {
-  "route_id": "RT-001",
+  "manifest_id": "MANIFEST-TODAY",
+  "courier_id": "DRV-884",
   "status": "OPTIMIZED",
   "ai_recommendation": {
-    "action_type": "REQUEST_ALTERNATE_PATH",
-    "severity": "medium",
-    "reason": "Sequence remains optimal but physical path blocked. Requesting Node.js to fetch alternate TomTom vector.",
-    "new_sequence": ["STP-A", "STP-C", "STP-B"],
+    "action_type": "RE-ROUTE",
+    "severity": "high",
+    "reason": "Re-ordering stops saves 14 minutes and protects time windows. High delay risk: Stop #2 (73%), Stop #3 (61%).",
+    "new_sequence": ["3", "1", "2"],
+    "stop_delay_probabilities": { "1": 0.312, "2": 0.731, "3": 0.614 },
     "impact": {
-      "time_saved_minutes": 12,
+      "time_saved_minutes": 14,
       "route_health": "AT_RISK"
+    },
+    "route_geojson": {
+      "type": "Feature",
+      "geometry": { "type": "MultiLineString", "coordinates": [ [...] ] },
+      "properties": { "stroke": "#3b82f6", "stroke-width": 4 }
     }
   }
 }
 ```
 
-The `route_health` field describes the overall health of the optimal route found:
+`route_health` values:
 - `OPTIMAL` — All delivery windows are achievable.
-- `AT_RISK` — Predicted delays exceed 15 minutes but windows are still reachable.
-- `FAILED` — Mathematically impossible to satisfy all time windows. Triggers `NOTIFY_DISPATCH_LATE`.
+- `AT_RISK` — Predicted delay exceeds 15 minutes but windows are still reachable.
+- `FAILED` — Mathematically impossible to meet all time windows.
 
 ---
 
-## ML Feature Contract
+## ML Models
 
-The XGBoost model was trained on historical route data and requires **11 features** to produce a delay prediction for each stop-pair segment.
+Two separate XGBoost models are trained and served. Both share the same 11-feature input contract.
+
+### Feature Contract
 
 | Feature | Source | Type | Description |
 |---|---|---|---|
-| `road_type` | Node.js (per stop) | categorical | `highway`, `urban`, `rural`, `mountain` |
-| `vehicle_type` | Node.js (payload root) | categorical | `van`, `truck`, `motorcycle`, `car` |
-| `weather_condition` | Node.js (`environment_horizon`) | categorical | `clear`, `cloudy`, `rain`, `snow`, `fog`, `wind` |
-| `traffic_level` | Node.js (`environment_horizon`) | categorical | `low`, `moderate`, `high`, `congested` |
-| `time_bucket` | Node.js (`environment_horizon`) | categorical | `morning`, `midday`, `evening`, `night` |
-| `temperature_c` | Node.js (`environment_horizon`) | numeric | Current temperature in Celsius |
-| `road_incident` | Node.js (`environment_horizon.incident_reported`) | binary | `0` or `1` — auto-converted from boolean |
-| `distance_from_prev_km` | **Computed internally** | numeric | Haversine distance between GPS coordinates |
-| `planned_travel_min` | **Computed internally** | numeric | `distance / vehicle_speed_profile * 60` |
-| `stop_sequence` | Node.js (per stop `current_order`) | numeric | Position of the stop in the route |
-| `package_weight_kg` | Node.js (per stop) | numeric | Weight of packages at this stop |
+| `road_type` | Per-stop payload | categorical | `highway`, `urban`, `rural`, `mountain` |
+| `vehicle_type` | Payload root | categorical | `van`, `truck`, `motorcycle`, `car` |
+| `weather_condition` | `environment_horizon` | categorical | `clear`, `cloudy`, `rain`, `snow`, `fog`, `wind` |
+| `traffic_level` | `environment_horizon` | categorical | `low`, `moderate`, `high`, `congested` |
+| `time_bucket` | `environment_horizon` | categorical | `early_morning`, `morning_rush`, `midday`, `evening_rush`, `night` |
+| `temperature_c` | `environment_horizon` | numeric | Current temperature in Celsius |
+| `road_incident` | `environment_horizon.incident_reported` | binary | `0` or `1` — auto-converted from boolean |
+| `distance_from_prev_km` | **Computed internally** | numeric | Actual road network distance (Dijkstra on OSMnx graph) |
+| `planned_travel_min` | **Computed internally** | numeric | `road_distance_km ÷ vehicle_speed_kmh × 60` |
+| `stop_sequence` | Per-stop `current_order` | numeric | Position of this stop in the route |
+| `package_weight_kg` | Per-stop payload | numeric | Weight of packages at this stop |
 
-> **Note:** `distance_from_prev_km` and `planned_travel_min` are the only two features that Node.js does **not** need to provide. They are physics-computed inside `ml_engine.py` using GPS coordinates and the vehicle-type speed profile.
+`distance_from_prev_km` and `planned_travel_min` are the only two features not provided by the gateway — they are computed inside `ml_engine.py` using road network distances and vehicle speed profiles.
+
+### Model 1 — XGBoost Regressor (`xgboost_delay_model.pkl`)
+
+Predicts `delay_at_stop_min` (continuous, in minutes) for each street edge. Used to assign AI-weighted costs to every road segment before Dijkstra runs.
+
+**Architecture:** Scikit-Learn `Pipeline` → `ColumnTransformer` (OneHotEncoder for categoricals, passthrough for numerics/binary) → `XGBRegressor`
+
+**Hyperparameters:** `n_estimators=150`, `max_depth=5`, `learning_rate=0.1`
+
+**Training data:** 1,451 segments from `route_stops.csv` (Sivas historical delivery data, 80/20 train-test split)
+
+| Metric | Value |
+|---|---|
+| MAE | **3.49 minutes** |
+| RMSE | **6.85 minutes** |
+| R² | **0.962** |
+
+### Model 2 — XGBoost Binary Classifier (`xgboost_prob_model.pkl`)
+
+Predicts the **probability that a stop will experience a delay greater than 10 minutes**. Output is a `{stop_id: float(0–1)}` dictionary used to annotate the AI recommendation reason shown to the courier.
+
+**Threshold:** 10 minutes (derived from dataset distribution)
+
+| Metric | Value |
+|---|---|
+| AUC-ROC | **0.998** |
+
+---
+
+## Design Assumptions
+
+The following constants were derived by averaging values from the training dataset (`route_stops.csv`, `routes.csv`). They are fixed at runtime and do not adapt dynamically.
 
 ### Vehicle Speed Profiles
-The Brain uses these baseline speeds to compute `planned_travel_min`:
-| Vehicle | Base Speed |
+
+Used to compute `planned_travel_min` from road distance. Averages from Sivas historical delivery telemetry.
+
+| Vehicle Type | Base Speed |
 |---|---|
 | Motorcycle | 52.2 km/h |
 | Car | 40.0 km/h |
 | Truck | 22.8 km/h |
 | Van | 22.5 km/h |
 
+### Service Time Per Stop
+
+```
+planned_service_min = 13 minutes
+```
+
+Fixed 13-minute dwell time is added at every stop after arrival. This is the average time-at-stop observed across all deliveries in `route_stops.csv`, covering package handoff, signature, and door-to-door walking time.
+
+### Time Window Penalty
+
+Arriving after `window_end` incurs a **+10,000-minute** cost penalty in the TSP optimizer — effectively making it mathematically preferable to take any route that avoids the violation.
+
+### Road Type Derivation
+
+For **segment scoring** (street edges), `road_type` is inferred from physical edge length:
+- `urban` if `distance_km < 1.0`
+- `highway` otherwise
+
+For **stop probability scoring**, `road_type` is taken directly from the stop's `road_type` field (passed in from the gateway payload), defaulting to `urban`.
+
 ---
 
-## Data Flow (Step by Step)
+## City Road Network
 
-```
-1. Node.js publishes JSON → [traffic_alerts_channel]
+The Brain downloads and persists the full drivable road network for **Sivas, Turkey** from OpenStreetMap using OSMnx on first startup. The network is stored in PostGIS and loaded into a NetworkX `DiGraph` at runtime.
 
-2. redis_worker.py receives the message
-   └── Validates it against TrafficAlertPayload (Pydantic schema)
-   └── Acquires a 10-second de-bounce lock for this route_id
+- **Scope:** Full Sivas city administrative boundary (`graph_from_place("Sivas, Turkey")`) — covers all urban districts and peripheral roads, matching the geographic coverage of the training dataset.
+- **Node representation:** GPS tuples `(lon, lat)` rounded to 5 decimal places for intersection snapping.
+- **Edge attributes:** `segment_id`, `name`, `distance_km`, `geom_wkt` (WKT LineString for GeoJSON export).
+- **Seeding:** Runs once on Brain startup. Subsequent restarts skip seeding if the `segments` table is non-empty.
 
-3. ml_engine.py → predict_segment_delays()
-   └── Reads vehicle_type → looks up speed profile
-   └── Builds adjacency matrix (all permutations of stop pairs)
-   └── For each pair: computes haversine distance + planned_travel_min
-   └── Broadcasts weather/traffic/time_bucket from environment_horizon
-   └── Runs XGBoost pipeline → outputs predicted_delay_min per segment
-
-4. routing.py → optimize_route()
-   └── Builds O(1) lookup dict from the scored matrix
-   └── Evaluates original stop sequence (time + penalties)
-   └── Runs 1000-iteration Hill-Climbing swap optimization
-   └── Applies hard penalties (+10,000 min) for SLA window violations
-   └── Returns: best sequence, time_saved, max_delay, minutes_late, health
-
-5. redis_worker.py → Decision Engine
-   └── FAILED health?             → NOTIFY_DISPATCH_LATE
-   └── Sequence changed?          → RE-ROUTE
-   └── TRAFFIC_ALERT + AT_STOP?  → DELAY_DEPARTURE
-   └── TRAFFIC_ALERT + EN_ROUTE? → REQUEST_ALTERNATE_PATH
-   └── Otherwise?                 → CONTINUE
-
-6. Publishes JSON response → [route_optimizations_channel]
-   └── Node.js picks it up and dispatches to driver app
-```
+Inter-stop distances are computed by snapping delivery coordinates to the nearest graph node and running Dijkstra weighted by physical `distance_km`. This replaces straight-line haversine and produces accurate road distances that match the training geography.
 
 ---
 
@@ -177,35 +272,33 @@ brain/
 ├── app/
 │   ├── api/
 │   │   ├── __init__.py
-│   │   └── routes.py           # FastAPI health check endpoint
+│   │   └── routes.py           # FastAPI routes: GET /api/health, POST /api/optimize
 │   ├── models/
 │   │   ├── __init__.py
-│   │   └── schemas.py          # Pydantic schema — the ML payload contract
+│   │   └── schemas.py          # Pydantic contracts: TrafficAlertPayload, Stop, etc.
 │   ├── services/
-│   │   ├── ml_engine.py        # XGBoost prediction pipeline
-│   │   ├── redis_worker.py     # Redis listener, validator, decision engine
-│   │   └── routing.py          # Hill-climbing route optimizer
+│   │   ├── map_engine.py       # Loads PostGIS segments → NetworkX DiGraph
+│   │   ├── map_seeder.py       # Downloads Sivas OSMnx network → seeds PostGIS
+│   │   ├── ml_engine.py        # XGBoost inference: segment scoring + stop probabilities
+│   │   ├── redis_worker.py     # Redis listener, payload validator, decision engine
+│   │   └── routing.py          # Hill-climbing TSP optimizer + GeoJSON builder
 │   ├── __init__.py
 │   └── main.py                 # FastAPI app entry point + background thread
 │
 ├── notebooks/
 │   ├── 01_data_exploration.ipynb   # EDA on the training dataset
-│   └── 02_train_xgboost.ipynb      # Original XGBoost training notebook
-│
-├── scripts/
-│   ├── retrain_model.py        # Standalone retraining script (mirrors notebook)
-│   └── test_event.py           # End-to-end Redis integration test
+│   └── 02_train_xgboost.ipynb      # XGBoost training pipeline (regressor + classifier)
 │
 ├── trained_models/
-│   ├── xgboost_delay_model.pkl # The trained XGBoost Pipeline (preprocessor + model)
-│   └── model_metadata.json     # Feature manifest for the model
+│   ├── xgboost_delay_model.pkl     # XGBoost regressor (delay minutes per segment)
+│   ├── xgboost_prob_model.pkl      # XGBoost classifier (P(delay > 10 min) per stop)
+│   └── model_metadata.json         # Feature manifest, types, and evaluation metrics
 │
-├── data/                       # Training CSVs (not committed to git)
+├── data/                       # Training CSVs 
 │
-├── .env                        # Local environment variables (Redis host/port)
-├── docker-compose.yml          # Spins up Redis 7.2 locally for development
-├── requirements.txt            # All Python dependencies
-└── README.md                   # This file
+├── Dockerfile
+├── requirements.txt
+└── README.md
 ```
 
 ---
@@ -213,68 +306,65 @@ brain/
 ## File Reference
 
 ### `app/main.py`
-The FastAPI application entry point. On startup it:
-1. Initializes the FastAPI app.
-2. Registers the `/api/health` REST route.
-3. Spawns a **background daemon thread** running `start_redis_listener()`, which keeps the AI pipeline permanently alive without blocking the web server.
+FastAPI application entry point. On startup: seeds the map if empty, loads all engines into `app.state`, and spawns the background Redis listener daemon thread.
 
 ### `app/api/routes.py`
-A minimal FastAPI router with a single `GET /api/health` endpoint. Used by Docker/AWS load balancers to confirm the service is alive and responsive.
+Two endpoints:
+- `GET /api/health` — liveness probe for Docker/load balancers.
+- `POST /api/optimize` — direct REST endpoint for Postman testing and integration demos. Accepts a full `TrafficAlertPayload` and runs the complete AI pipeline synchronously.
 
 ### `app/models/schemas.py`
-Pydantic data models that represent the **strict contract** between Node.js and the Python Brain. Every incoming Redis message is validated against `TrafficAlertPayload` before any ML computation begins. If a required field is missing or malformed, the payload is silently dropped and the error is logged.
+Pydantic v1 data models forming the strict contract between the Node.js gateway and the Brain. Every Redis message is validated before any ML computation begins. Invalid payloads are dropped and logged.
 
-**Key models:**
-- `TrafficAlertPayload` — The root payload received from Node.js.
-- `EnvironmentHorizon` — Real-world conditions; all fields feed directly into ML.
-- `Stop` — A single delivery destination.
-- `CurrentLocation` — The truck's live GPS position.
+Models: `TrafficAlertPayload`, `EnvironmentHorizon`, `Stop`, `CurrentLocation`.
+
+### `app/services/map_seeder.py`
+Runs once on Brain startup. Downloads the full Sivas, Turkey drivable road network from OpenStreetMap via OSMnx and bulk-inserts road segments into the PostGIS `segments` table. Skips if the table is already populated.
+
+### `app/services/map_engine.py`
+Reads the `segments` table from PostGIS and builds an in-memory NetworkX `DiGraph`. Each edge carries `distance_km`, `geom_wkt`, `segment_id`, and `name`. Exposes `get_graph()` and `get_nearest_node(lon, lat)` for use by the ML and routing engines.
 
 ### `app/services/ml_engine.py`
-The core AI physics engine. Responsibilities:
-- Loads the trained XGBoost pipeline from disk on startup (`joblib`).
-- Computes **Haversine distances** between all stop pairs using GPS coordinates.
-- Calculates `planned_travel_min` using vehicle-specific speed profiles.
-- Builds a full **pairwise adjacency DataFrame** of every possible stop-to-stop segment.
-- Broadcasts environment variables (`weather_condition`, `traffic_level`, `time_bucket`, `temperature_c`, `road_incident`) across all rows.
-- Runs the XGBoost pipeline to predict `delay_at_stop_min` for every possible segment.
+Core AI inference engine. Responsibilities:
+- `predict_segment_delays(payload, map_graph)` — scores every road edge with XGBoost delay weights. Returns a weighted graph ready for Dijkstra.
+- `predict_stop_probabilities(stops, payload, map_graph)` — computes road-network distance between consecutive stops via Dijkstra (falls back to haversine if graph is empty), then runs the binary classifier to output delay probabilities per stop.
+- `_road_distance_km(graph, lat1, lon1, lat2, lon2)` — snaps GPS coordinates to nearest graph nodes and sums Dijkstra path edge distances.
 
 ### `app/services/routing.py`
-The combinatorial route optimizer. Responsibilities:
-- Converts the scored matrix into an **O(1) dictionary lookup** for fast sequence evaluation.
-- Evaluates any given stop sequence by simulating arrival times, checking time windows, and accruing penalties.
-- Runs a **1,000-iteration randomized Hill-Climbing algorithm** to find the optimal stop sequence.
-- Returns the best sequence, time saved vs. original, maximum delay encountered, minutes late (if any), and overall route health.
+Combinatorial route optimizer. Responsibilities:
+- `_evaluate_sequence(sequence, scored_graph, start_time)` — simulates courier arrival times along a given stop order using Dijkstra on the AI-weighted graph. Tracks time window violations, wait times, and accumulated service times.
+- `optimize_route(stops, scored_graph, current_time_iso)` — runs 50-iteration randomized Hill-Climbing (random swap of two stops, keep if cost improves). Returns the best sequence, time saved vs. original, health status, and a `route_geojson` MultiLineString built from the WKT road geometries.
+- `_build_geojson(wkt_segments)` — converts raw WKT LineStrings from the Dijkstra path into a GeoJSON Feature for the frontend map layer.
 
 ### `app/services/redis_worker.py`
-The central coordinator. Responsibilities:
-- Maintains a persistent connection to Redis.
-- Listens indefinitely on `traffic_alerts_channel`.
-- **Acquires an atomic 10-second lock** (de-bouncer) per `route_id` to prevent duplicate processing if Node.js sends rapid repeat events.
-- Validates payloads with Pydantic before any processing.
-- Orchestrates `ml_engine → routing → decision engine`.
-- Publishes the final JSON action to `route_optimizations_channel`.
+Central coordinator. Maintains a persistent Redis subscription on `traffic_alerts_channel`. For each valid message:
+1. Acquires an atomic 10-second lock per `manifest_id` (prevents duplicate processing).
+2. Validates the payload with Pydantic.
+3. Runs `ml_engine → routing → decision engine` in sequence.
+4. Publishes the result JSON to `route_optimizations_channel`.
 
-### `scripts/retrain_model.py`
-A standalone Python script that replicates the Jupyter training pipeline without needing a running notebook server. Run this whenever the training data changes. It overwrites:
-- `trained_models/xgboost_delay_model.pkl`
-- `trained_models/model_metadata.json`
+---
 
-### `scripts/test_event.py`
-An end-to-end integration test script. It:
-1. Seeds Redis with a live environment state.
-2. Publishes a realistic `TRAFFIC_ALERT` payload to `traffic_alerts_channel`.
-3. Listens on `route_optimizations_channel` and prints the Brain's JSON response.
+## Environment Variables
 
-Requires a running Uvicorn server and Redis instance.
+| Variable | Default | Description |
+|---|---|---|
+| `REDIS_HOST` | `redis` | Redis hostname (`localhost` for local dev) |
+| `REDIS_PORT` | `6379` | Redis port |
+| `DB_HOST` | `postgres` | PostgreSQL hostname |
+| `DB_PORT` | `5432` | PostgreSQL port |
+| `DB_USER` | `postgres` | PostgreSQL user |
+| `DB_PASS` | `password` | PostgreSQL password |
+| `DB_NAME` | `smart_logistics` | PostgreSQL database name |
 
-### `trained_models/xgboost_delay_model.pkl`
-The serialized Scikit-Learn `Pipeline` object containing:
-1. A `ColumnTransformer` preprocessor (OneHotEncodes categoricals, passes numerics/binaries through).
-2. An `XGBRegressor` model (150 estimators, depth 5, learning rate 0.1).
+---
 
-### `trained_models/model_metadata.json`
-A JSON manifest documenting the expected feature order, feature types, and target variable. Used as a reference document for the Node.js team to understand what the model needs.
+## Redis Channels
+
+| Channel | Direction | Description |
+|---|---|---|
+| `traffic_alerts_channel` | Gateway → Brain | Incoming courier events (health checks and traffic alerts) |
+| `route_optimizations_channel` | Brain → Gateway | Outgoing AI recommendations with GeoJSON route |
 
 ---
 
@@ -282,21 +372,21 @@ A JSON manifest documenting the expected feature order, feature types, and targe
 
 ### Prerequisites
 - Python 3.10+
-- Docker Desktop (for Redis)
+- Docker Desktop (for PostgreSQL + PostGIS + Redis)
 
-### 1. Start Redis
+### 1. Start infrastructure
 ```bash
-docker-compose up -d
+docker compose up postgres redis -d
 ```
 
 ### 2. Create and activate virtual environment
 ```bash
 python -m venv venv
 
-# Windows (PowerShell)
+# Windows
 .\venv\Scripts\Activate.ps1
 
-# macOS/Linux
+# macOS / Linux
 source venv/bin/activate
 ```
 
@@ -306,50 +396,35 @@ pip install -r requirements.txt
 ```
 
 ### 4. Configure environment
-The `.env` file is pre-configured for local development:
-```
+```bash
+# .env (pre-configured for local dev)
 REDIS_HOST=localhost
 REDIS_PORT=6379
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASS=password
+DB_NAME=smart_logistics
 ```
 
 ### 5. Start the Brain
 ```bash
-uvicorn app.main:app
+uvicorn app.main:app --reload
 ```
 
-You should see:
+On first run you will see the OSMnx map download and seeding:
 ```
-Initializing Gatekeeper and connecting to Redis...
-Loading ML Pipeline and Routing Engine...
-✅ Python Brain Worker is Ready and Armed.
-🎧 Listening for events on 'traffic_alerts_channel'...
-```
-
-### 6. Run the integration test
-In a second terminal (with venv activated):
-```bash
-python scripts/test_event.py
+The Brain is powering up...
+🗺️ Seeding Sivas road network from OpenStreetMap...
+💾 Saving routes into PostgreSQL (PostGIS)...
+✅ Successfully seeded N physical street segments.
+✅ MapEngine: NetworkX graph built with N road segments.
+Background Redis listener thread initialized.
 ```
 
-### 7. Retrain the model (when data changes)
-```bash
-python scripts/retrain_model.py
+### 6. Test the REST endpoint (Postman / curl)
 ```
-
----
-
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `REDIS_HOST` | `localhost` | Redis server hostname. Use `redis` when running inside Docker Compose. |
-| `REDIS_PORT` | `6379` | Redis server port. |
-
----
-
-## Redis Channels
-
-| Channel | Direction | Description |
-|---|---|---|
-| `traffic_alerts_channel` | Node.js → Brain | Incoming courier events (health checks and traffic alerts) |
-| `route_optimizations_channel` | Brain → Node.js | Outgoing AI recommendations |
+POST http://localhost:8000/api/optimize
+Content-Type: application/json
+```
+See `app/models/schemas.py` for the full request body schema.

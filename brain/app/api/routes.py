@@ -29,7 +29,7 @@ async def optimize_route(payload: TrafficAlertPayload, request: Request):
     stops      = [s.dict() for s in payload.unvisited_stops]
     payload_dict = payload.dict()
 
-    stop_probs   = ml_engine.predict_stop_probabilities(stops, payload_dict)
+    stop_probs   = ml_engine.predict_stop_probabilities(stops, payload_dict, map_engine.get_graph())
     scored_graph = ml_engine.predict_segment_delays(payload_dict, map_engine.get_graph())
     result       = route_optimizer.optimize_route(
         stops,
