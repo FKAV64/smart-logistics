@@ -3,7 +3,7 @@ import { Clock, MapPin, Phone, ShieldCheck, CheckCircle2, Navigation } from 'luc
 import './DeliveryItem.css';
 
 const DeliveryItem = ({ delivery, isActive, isCompleted }) => {
-  const { time, timeEnd, destination, clientNumber, urgency } = delivery;
+  const { time, timeEnd, destination, clientNumber, urgency, address } = delivery;
 
   const getUrgencyClass = () => {
     if (isCompleted) return 'status-completed';
@@ -42,6 +42,12 @@ const DeliveryItem = ({ delivery, isActive, isCompleted }) => {
           <MapPin size={16} className={isCompleted ? 'icon-dim' : 'icon-blue'} />
           <span className={`destination-text ${isCompleted ? 'text-dim' : ''}`}>{destination}</span>
         </div>
+        {address && (
+          <div className="delivery-detail">
+            <Navigation size={16} className="icon-dim" />
+            <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>{address}</span>
+          </div>
+        )}
         {!isCompleted && (
           <div className="delivery-detail">
             <Phone size={16} className="icon-green" />

@@ -57,6 +57,7 @@ export const useTelemetry = () => {
                 timeEnd:      fmt(stop.time_window_close),
                 destination:  stop.client_first_name,
                 clientNumber: stop.client_phone || '',
+                address:      stop.street_name || `${Number(stop.latitude).toFixed(4)}, ${Number(stop.longitude).toFixed(4)}`,
                 urgency:      stop.delivery_order,
               }));
               setDeliveries(deliveries);

@@ -3,17 +3,50 @@ const jwt  = require('jsonwebtoken');
 const db   = require('./db');
 const { pubClient, aiEvents } = require('./redisClient');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey_hackathon_only';
+const JWT_SECRET  = process.env.JWT_SECRET      || 'supersecretkey_hackathon_only';
+const TOMTOM_URL  = process.env.TOMTOM_MOCK_URL || 'http://tomtom-mock:7777';
 
 const courierState = {};
 
 function getTimeBucket() {
   const h = new Date().getHours();
-  if (h >= 7  && h < 10) return 'morning_rush';  // 07:00–09:59
-  if (h >= 10 && h < 17) return 'midday';         // 10:00–16:59
-  if (h >= 17 && h < 20) return 'evening_rush';   // 17:00–19:59
-  if (h >= 20 || h < 5)  return 'night';          // 20:00–04:59
-  return 'early_morning';                          // 05:00–06:59
+  if (h >= 7  && h < 10) return 'morning_rush';
+  if (h >= 10 && h < 17) return 'midday';
+  if (h >= 17 && h < 20) return 'evening_rush';
+  if (h >= 20 || h < 5)  return 'night';
+  return 'early_morning';
+}
+
+const TRAFFIC_MAP = { LIGHT: 'low', MODERATE: 'moderate', HEAVY: 'high', GRIDLOCK: 'congested' };
+const WEATHER_MAP = {
+  clear: 'clear', partly_cloudy: 'cloudy', cloudy: 'cloudy',
+  rainy: 'rain', foggy: 'fog', snowy: 'snow', icy: 'snow',
+};
+
+async function fetchEnvironment(lat, lon) {
+  try {
+    const [tRes, wRes] = await Promise.all([
+      fetch(`${TOMTOM_URL}/traffic/services/4/flowSegmentData/absolute/10/json?point=${lat},${lon}`),
+      fetch(`${TOMTOM_URL}/weather/1/currentConditions/json?q=${lat},${lon}`),
+    ]);
+    const { flowSegmentData: f } = await tRes.json();
+    const { currentConditions:  c } = await wRes.json();
+    return {
+      weather_condition: WEATHER_MAP[c.weather_condition] || 'clear',
+      traffic_level:     TRAFFIC_MAP[f.trafficLevel]       || 'moderate',
+      time_bucket:       getTimeBucket(),
+      temperature_c:     c.temperature_c,
+      incident_reported: f.roadClosure,
+    };
+  } catch {
+    return {
+      weather_condition: 'clear',
+      traffic_level:     'moderate',
+      time_bucket:       getTimeBucket(),
+      temperature_c:     15.0,
+      incident_reported: false,
+    };
+  }
 }
 
 function buildStops(rows) {
@@ -49,7 +82,6 @@ function setupWebSocket(wss) {
 
     wss.clients.forEach((client) => {
       if (client.readyState !== 1) return;
-
       if (client.role === 'courier' && client.courierId === data.courier_id) {
         client.send(JSON.stringify({ type: 'AI_ROUTE_RECOMMENDATION', payload: frontendPayload }));
         if (rec.route_geojson) {
@@ -78,14 +110,16 @@ function setupWebSocket(wss) {
       }
     }
 
+    // Normalize role to lowercase so simulator (?role=courier) and JWT (role:'courier') match
+    role = (role || '').toLowerCase();
     Object.assign(ws, { role, courierId, vehicleType });
 
     if (role === 'courier' && courierId) {
       if (!courierState[courierId]) {
         courierState[courierId] = {
-          lastPoint:            null,
+          lastPoint:             null,
           accumulatedDistanceKM: 0,
-          segmentStartTime:     Date.now()
+          segmentStartTime:      Date.now()
         };
       }
     }
@@ -112,17 +146,22 @@ function setupWebSocket(wss) {
                  dm.manifest_id,
                  ms.delivery_status        AS status,
                  c.first_name              AS client_first_name,
-                 c.phone                   AS client_phone
+                 c.phone                   AS client_phone,
+                 nearest.name              AS street_name
                FROM manifest_stops ms
-               JOIN daily_manifest         dm  ON ms.manifest_id = dm.manifest_id
-               JOIN client_commande_detail ccd ON ms.commande_id  = ccd.commande_id
-               JOIN clients               c   ON ccd.client_id   = c.client_id
+               JOIN daily_manifest         dm   ON ms.manifest_id  = dm.manifest_id
+               JOIN client_commande_detail ccd  ON ms.commande_id  = ccd.commande_id
+               JOIN clients               c    ON ccd.client_id   = c.client_id
+               LEFT JOIN LATERAL (
+                 SELECT name FROM segments
+                 ORDER BY geom <-> ST_SetSRID(ST_MakePoint(ccd.lon, ccd.lat), 4326)
+                 LIMIT 1
+               ) nearest ON true
                WHERE dm.courier_id = $1 AND ms.delivery_status = 'PENDING'
                ORDER BY ms.delivery_order ASC`,
               [ws.courierId]
             );
 
-            // Send manifest directly to courier frontend
             ws.send(JSON.stringify({
               type:    'DAILY_MANIFEST_LOADED',
               payload: { stops: result.rows }
@@ -131,8 +170,12 @@ function setupWebSocket(wss) {
 
             if (result.rows.length === 0) return;
 
-            // Forward to Brain via Redis with correct TrafficAlertPayload format
+            // Fetch real environment from TomTom for the courier's current position
             const lastPos = courierState[ws.courierId]?.lastPoint?.geometry?.coordinates;
+            const hcLat   = lastPos ? lastPos[1] : 39.7505;
+            const hcLon   = lastPos ? lastPos[0] : 37.0150;
+            const env     = await fetchEnvironment(hcLat, hcLon);
+
             await pubClient.publish('traffic_alerts_channel', JSON.stringify({
               event_type:     'ROUTINE_HEALTH_CHECK',
               manifest_id:    result.rows[0].manifest_id,
@@ -140,18 +183,12 @@ function setupWebSocket(wss) {
               courier_status: 'AT_STOP',
               vehicle_type:   (ws.vehicleType || 'van').toLowerCase(),
               current_location: {
-                lat:       lastPos ? lastPos[1] : 39.7505,
-                lon:       lastPos ? lastPos[0] : 37.0150,
+                lat:       hcLat,
+                lon:       hcLon,
                 timestamp: new Date().toISOString()
               },
-              environment_horizon: {
-                weather_condition: 'clear',
-                traffic_level:     'moderate',
-                time_bucket:       getTimeBucket(),
-                temperature_c:     15.0,
-                incident_reported: false
-              },
-              unvisited_stops: buildStops(result.rows)
+              environment_horizon:  env,
+              unvisited_stops:      buildStops(result.rows)
             }));
             console.log(`[HEALTH CHECK] Pushed to Brain for ${ws.courierId}`);
 
@@ -161,84 +198,111 @@ function setupWebSocket(wss) {
         }
 
         // ------------------------------------------------------------------
-        // GPS PING — accumulate distance, detect slow traffic
+        // GPS PING — broadcast position, detect traffic 5 km ahead
         // ------------------------------------------------------------------
         if (ws.role === 'courier' && data.type === 'GPS_PING') {
           const state        = courierState[ws.courierId];
           const currentPoint = turf.point([data.lon, data.lat]);
+          const speed        = data.currentSpeed ?? 0;
+
+          // 1. Always broadcast live position to all connected frontend tabs for this courier
+          wss.clients.forEach((client) => {
+            if (client.readyState !== 1) return;
+            if (client.role === 'courier' && client.courierId === ws.courierId) {
+              client.send(JSON.stringify({
+                type:    'VEHICLE_TELEMETRY',
+                payload: { id: ws.courierId, lat: data.lat, lng: data.lon, speed, routeStatus: 'on-time' },
+              }));
+            }
+          });
 
           if (state.lastPoint) {
             const distanceKM = turf.distance(state.lastPoint, currentPoint, { units: 'kilometers' });
             state.accumulatedDistanceKM += distanceKM;
-            state.lastPoint = currentPoint;
 
+            // 2. Predictive traffic check: query TomTom 5 km ahead on current heading
+            const heading    = turf.bearing(state.lastPoint, currentPoint);
+            const aheadPoint = turf.destination(currentPoint, 5, heading, { units: 'kilometers' });
+            const aheadLat   = aheadPoint.geometry.coordinates[1];
+            const aheadLon   = aheadPoint.geometry.coordinates[0];
+
+            const env = await fetchEnvironment(aheadLat, aheadLon);
+
+            if (['high', 'congested'].includes(env.traffic_level)) {
+              try {
+                const stopsResult = await db.query(
+                  `SELECT stop_id, latitude, longitude, delivery_order,
+                          time_window_open, time_window_close, package_weight_kg, manifest_id
+                   FROM active_courier_stops
+                   WHERE courier_id = $1 AND status = 'PENDING'
+                   ORDER BY delivery_order ASC`,
+                  [ws.courierId]
+                );
+                if (stopsResult.rows.length > 0) {
+                  await pubClient.publish('traffic_alerts_channel', JSON.stringify({
+                    event_type:          'TRAFFIC_ALERT',
+                    manifest_id:         stopsResult.rows[0].manifest_id,
+                    courier_id:          ws.courierId,
+                    courier_status:      'EN_ROUTE',
+                    vehicle_type:        (ws.vehicleType || 'van').toLowerCase(),
+                    current_location:    { lat: data.lat, lon: data.lon, timestamp: new Date().toISOString() },
+                    environment_horizon: { ...env, incident_reported: true },
+                    unvisited_stops:     buildStops(stopsResult.rows),
+                  }));
+                  console.log(`[TRAFFIC ALERT] 5km-ahead congestion for ${ws.courierId} (${env.traffic_level})`);
+                }
+              } catch (alertErr) { console.error('Ahead-traffic alert error:', alertErr); }
+            }
+
+            // 3. Telemetry stream log every 1 km (for analytics)
             if (state.accumulatedDistanceKM >= 1.0) {
               const timeS  = (Date.now() - state.segmentStartTime) / 1000;
-              const hours  = timeS / 3600;
-              let avgSpeed = state.accumulatedDistanceKM / hours;
-
-              const segmentId = data.segment_id || 1;
-
-              if (data.test_spoof_speed !== undefined && data.test_spoof_speed !== null) {
-                avgSpeed = data.test_spoof_speed;
+              let avgSpeed = state.accumulatedDistanceKM / (timeS / 3600);
+              if (data.currentSpeed !== undefined && data.currentSpeed !== null) {
+                avgSpeed = data.currentSpeed;
               }
 
               await pubClient.xadd(
                 'telemetry_stream', '*',
                 'courier_id',    ws.courierId,
-                'segment_id',    segmentId,
+                'segment_id',    data.segment_id || 1,
                 'entry_time',    new Date(state.segmentStartTime).toISOString(),
                 'exit_time',     new Date().toISOString(),
                 'average_speed', avgSpeed.toFixed(2),
                 'distance_km',   state.accumulatedDistanceKM.toFixed(2)
               );
 
-              if (avgSpeed < 10) {
-                try {
-                  const stopsResult = await db.query(
-                    `SELECT stop_id, latitude, longitude, delivery_order,
-                            time_window_open, time_window_close, package_weight_kg, manifest_id
-                     FROM active_courier_stops
-                     WHERE courier_id = $1 AND status = 'PENDING'
-                     ORDER BY delivery_order ASC`,
-                    [ws.courierId]
-                  );
-
-                  if (stopsResult.rows.length > 0) {
-                    await pubClient.publish('traffic_alerts_channel', JSON.stringify({
-                      event_type:     'TRAFFIC_ALERT',
-                      manifest_id:    stopsResult.rows[0].manifest_id,
-                      courier_id:     ws.courierId,
-                      courier_status: 'EN_ROUTE',
-                      vehicle_type:   (ws.vehicleType || 'van').toLowerCase(),
-                      current_location: {
-                        lat:       data.lat,
-                        lon:       data.lon,
-                        timestamp: new Date().toISOString()
-                      },
-                      environment_horizon: {
-                        weather_condition: 'clear',
-                        traffic_level:     'congested',
-                        time_bucket:       getTimeBucket(),
-                        temperature_c:     15.0,
-                        incident_reported: true
-                      },
-                      unvisited_stops: buildStops(stopsResult.rows)
-                    }));
-                    console.log(`[TRAFFIC ALERT] Published for ${ws.courierId} (avg speed: ${avgSpeed.toFixed(1)} km/h)`);
-                  }
-                } catch (alertErr) {
-                  console.error('Error publishing traffic alert:', alertErr);
-                }
-              }
-
               state.accumulatedDistanceKM = 0;
               state.segmentStartTime      = Date.now();
             }
           } else {
-            state.lastPoint       = currentPoint;
             state.segmentStartTime = Date.now();
           }
+
+          state.lastPoint = currentPoint;
+        }
+
+        // ------------------------------------------------------------------
+        // STOP REACHED — mark delivery complete in DB and notify frontend
+        // ------------------------------------------------------------------
+        if (ws.role === 'courier' && data.type === 'STOP_REACHED') {
+          const stopId = data.stop_id;
+          try {
+            await db.query(
+              'UPDATE manifest_stops SET delivery_status = $1 WHERE stop_id = $2',
+              ['DELIVERED', stopId]
+            );
+            wss.clients.forEach((client) => {
+              if (client.readyState !== 1) return;
+              if (client.role === 'courier' && client.courierId === ws.courierId) {
+                client.send(JSON.stringify({
+                  type:    'DELIVERY_COMPLETED',
+                  payload: { deliveryId: `STOP-${stopId}` },
+                }));
+              }
+            });
+            console.log(`[DELIVERY] Stop ${stopId} marked DELIVERED for ${ws.courierId}`);
+          } catch (err) { console.error('Error marking stop delivered:', err); }
         }
 
         // ------------------------------------------------------------------

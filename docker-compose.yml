@@ -27,6 +27,8 @@ services:
     build:
       context: ./simulator
     container_name: smart_logistics_tomtom_mock
+    environment:
+      FORCE_CONGESTION: "true"
     ports:
       - "7777:7777"
 
@@ -66,6 +68,20 @@ services:
       tomtom-mock:
         condition: service_started
     command: npm run worker
+
+  courier-simulator:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile.courier
+    container_name: smart_logistics_courier_sim
+    environment:
+      COURIER_ID: DRV-884
+      GATEWAY_URL: ws://gateway:3000
+      START_LAT: "39.7200"
+      START_LON: "37.0100"
+    depends_on:
+      - gateway
+    restart: "no"
 
   brain:
     build:

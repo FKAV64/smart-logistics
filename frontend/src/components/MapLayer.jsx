@@ -47,8 +47,20 @@ const createStopIcon = () => {
   });
 };
 
+const createCompletedStopIcon = () => L.divIcon({
+  className: 'stop-marker-icon',
+  html: `<div style="filter: drop-shadow(0 2px 4px rgba(107,114,128,0.4)); opacity: 0.45;">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="#6b7280" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+      <circle cx="12" cy="10" r="3" fill="white" stroke="none"></circle>
+    </svg>
+  </div>`,
+  iconSize: [32, 32],
+  iconAnchor: [16, 32],
+});
+
 const MapLayer = () => {
-  const { deliveries, vehicles, activeRoutes, pendingRecommendations, hoveredRecommendationId } = useCourierStore();
+  const { deliveries, vehicles, activeRoutes, pendingRecommendations, hoveredRecommendationId, completedDeliveryIds } = useCourierStore();
   
   // Timer to force re-render for ghosting logic (every 10s)
   const [, setTick] = useState(0);
@@ -69,21 +81,24 @@ const MapLayer = () => {
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
       />
 
-      {/* Render Delivery Stops (Red Arrows) */}
-      {deliveries.map((stop) => (
-        stop.lat && stop.lng && (
-          <Marker 
-            key={stop.id} 
-            position={[stop.lat, stop.lng]} 
-            icon={createStopIcon()}
+      {/* Render Delivery Stops — grey when completed */}
+      {deliveries.map((stop) => {
+        const isCompleted = completedDeliveryIds.includes(stop.id);
+        return stop.lat && stop.lng && (
+          <Marker
+            key={stop.id}
+            position={[stop.lat, stop.lng]}
+            icon={isCompleted ? createCompletedStopIcon() : createStopIcon()}
           >
             <Popup>
-              <strong>{stop.destination}</strong><br/>
+              <strong>{stop.destination}</strong>
+              {isCompleted && <span style={{ color: '#6b7280' }}> ✓ Delivered</span>}<br/>
+              {stop.address && <span style={{ fontSize: '0.85em', opacity: 0.8 }}>{stop.address}</span>}<br/>
               {stop.clientNumber && <span>{stop.clientNumber}</span>}
             </Popup>
           </Marker>
-        )
-      ))}
+        );
+      })}
 
       {/* Render Active Routes */}
       {activeRoutes.map((routeData, index) => (
@@ -132,7 +147,7 @@ const MapLayer = () => {
               <Popup>
                 <strong>Vehicle ID:</strong> {vehicle.id}<br/>
                 <strong>Status:</strong> {status.toUpperCase()}<br/>
-                <strong>Speed:</strong> {vehicle.speed} mph
+                <strong>Speed:</strong> {vehicle.speed} km/h
               </Popup>
             </Marker>
           </FeatureGroup>

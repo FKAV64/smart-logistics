@@ -7,6 +7,7 @@ const PORT = process.env.PORT || 7777;
 
 /** Traffic congestion factor 0 (free flow) → 1 (gridlock), driven by time of day */
 function getTrafficFactor() {
+  if (process.env.FORCE_CONGESTION === 'true') return 0.90; // Demo mode: always HEAVY traffic
   const now = new Date();
   const h   = now.getHours() + now.getMinutes() / 60;
   const morningRush = Math.exp(-((h - 8.0) ** 2) / 1.5);

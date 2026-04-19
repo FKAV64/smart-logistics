@@ -1,0 +1,6 @@
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --omit=dev
+COPY courier.js .
+CMD ["sh", "-c", "sleep 30 && node courier.js"]
