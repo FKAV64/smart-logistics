@@ -1,28 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useCourierStore } from '../store/useCourierStore';
-import { useTelemetry } from '../hooks/useTelemetry';
-import { Clock, AlertTriangle, Route as RouteIcon, CheckCircle, RotateCw, Phone, Mail } from 'lucide-react';
+import { Clock, AlertTriangle, Route as RouteIcon, CheckCircle, RotateCw, Mail } from 'lucide-react';
 import './ActionCard.css';
 
-const ActionCard = ({ recommendation }) => {
-  const { 
-    id, 
-    vehicleId, 
-    severity, 
-    reason, 
-    impact, 
-    action_type, 
-    status, 
-    estimatedViolationTime 
+const ActionCard = ({ recommendation, sendMessage }) => {
+  const {
+    id,
+    vehicleId,
+    severity,
+    reason,
+    impact,
+    action_type,
+    status,
+    estimatedViolationTime,
   } = recommendation;
 
-  const { sendMessage } = useTelemetry();
+  const { setHoveredRecommendation, setRecommendationSyncing, confirmRecommendationSync, removeRecommendation } = useCourierStore();
 
-  const { setHoveredRecommendation, setRecommendationSyncing, removeRecommendation, vehicles } = useCourierStore();
-  
-  const vehicle = vehicles.find(v => v.id === vehicleId);
-  const routeStatus = vehicle?.routeStatus || 'on-time';
-  
   const [slackTimeStr, setSlackTimeStr] = useState('');
 
   useEffect(() => {
@@ -43,15 +37,27 @@ const ActionCard = ({ recommendation }) => {
   const handleHoverEnter = () => setHoveredRecommendation(id);
   const handleHoverLeave = () => setHoveredRecommendation(null);
 
-  // Auto-remove applied cards after delay
   useEffect(() => {
     if (status === 'Applied') {
-      const timer = setTimeout(() => {
-        removeRecommendation(id);
-      }, 3000);
+      const timer = setTimeout(() => removeRecommendation(id), 3000);
       return () => clearTimeout(timer);
     }
   }, [status, id, removeRecommendation]);
+
+  const sevLower = (severity || '').toLowerCase().replace(/-/g, '');
+  const isCritical = sevLower === 'critical';
+  const isReroute  = sevLower === 'reroute';
+
+  const getStatusClass = () => {
+    switch (sevLower) {
+      case 'reroute':  return 'status-reroute';
+      case 'critical': return 'status-critical';
+      case 'info':     return 'status-info';
+      default:         return 'status-on-time';
+    }
+  };
+
+  const getLabel = () => (severity || 'NORMAL').toUpperCase().replace(/-/g, '');
 
   const handleApprove = () => {
     if (status) return;
@@ -60,8 +66,9 @@ const ActionCard = ({ recommendation }) => {
       type: 'APPROVE_ROUTE',
       payload: {
         routeId: recommendation.manifest_id,
+        recId:   id,
         recommendedStopsOrder: (recommendation.new_sequence || []).map((stopId, idx) => ({
-          stop_id: String(stopId),
+          stop_id:    String(stopId),
           stop_order: idx + 1,
         })),
       },
@@ -69,34 +76,14 @@ const ActionCard = ({ recommendation }) => {
   };
 
   const handleRefuse = () => {
-    if (status) return; 
-    setRecommendationSyncing(id); 
+    if (status) return;
+    removeRecommendation(id);
     sendMessage({ type: 'REFUSE_ROUTE', payload: { id } });
   };
 
-  const getStatusClass = () => {
-    switch (routeStatus) {
-      case 'on-time': return 'status-on-time';
-      case 'reroute': return 'status-reroute';
-      case 'critical': return 'status-critical';
-      case 'info': return 'status-info';
-      default: return 'status-on-time';
-    }
-  };
-
-  const getLabel = () => {
-    switch (routeStatus) {
-      case 'on-time': return 'NORMAL';
-      case 'reroute': return 'REROUTE';
-      case 'critical': return 'CRITICAL';
-      case 'info': return 'INFO';
-      default: return 'NORMAL';
-    }
-  };
-
   return (
-    <div 
-      className={`action-card ${getStatusClass()} ${routeStatus === 'reroute' ? 'card-expanded' : ''}`}
+    <div
+      className={`action-card ${getStatusClass()} ${(isReroute || isCritical) ? 'card-expanded' : ''}`}
       onMouseEnter={handleHoverEnter}
       onMouseLeave={handleHoverLeave}
     >
@@ -106,9 +93,8 @@ const ActionCard = ({ recommendation }) => {
       </div>
 
       <div className="card-body">
-        {/* Context comes directly from Node.js (reason field) */}
         <p className="reason-text"><strong>Context:</strong> {reason}</p>
-        
+
         {impact && (
           <div className="impact-grid">
             <div className="impact-item">
@@ -122,18 +108,20 @@ const ActionCard = ({ recommendation }) => {
           </div>
         )}
 
-        {routeStatus === 'critical' && (
+        {isCritical && (
           <div className="constraint-box">
             <AlertTriangle size={16} />
-            <span className="slack-time">DELAY INEVITABLE</span>
+            <span className="slack-time">
+              {slackTimeStr ? slackTimeStr : 'DELAY INEVITABLE'}
+            </span>
           </div>
         )}
       </div>
 
       <div className="card-footer">
-        {routeStatus === 'critical' ? (
-          <button 
-            className={`btn ${status === 'Sent' ? 'btn-success' : status === 'Syncing...' ? 'btn-warning' : 'btn-danger'}`} 
+        {isCritical ? (
+          <button
+            className={`btn ${status === 'Sent' ? 'btn-success' : status === 'Syncing...' ? 'btn-warning' : 'btn-danger'}`}
             onClick={() => {
               if (status) return;
               setRecommendationSyncing(id);
@@ -142,16 +130,16 @@ const ActionCard = ({ recommendation }) => {
             disabled={!!status}
           >
             {status === 'Sent' ? (
-               <><CheckCircle size={16} /> SENT!</>
+              <><CheckCircle size={16} /> SENT!</>
             ) : status === 'Syncing...' ? (
-               <><RotateCw size={16} className="spin" /> SENDING...</>
+              <><RotateCw size={16} className="spin" /> SENDING...</>
             ) : (
-               <><Mail size={16} /> SEND EMAIL</>
+              <><Mail size={16} /> SEND EMAIL</>
             )}
           </button>
         ) : (
           <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
-            <button 
+            <button
               className={`btn ${status === 'Applied' ? 'btn-success' : status === 'Syncing...' ? 'btn-warning' : 'btn-primary'}`}
               style={{ flex: 1 }}
               onClick={handleApprove}
@@ -165,11 +153,10 @@ const ActionCard = ({ recommendation }) => {
                 'Approve Swap'
               )}
             </button>
-            <button 
+            <button
               className="btn btn-danger"
               style={{ flex: 1, display: status ? 'none' : 'flex' }}
               onClick={handleRefuse}
-              disabled={!!status}
             >
               Refuse
             </button>

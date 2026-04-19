@@ -43,7 +43,8 @@ const createStopIcon = () => {
       </div>
     `,
     iconSize: [32, 32],
-    iconAnchor: [16, 32], // Bottom center of the pin
+    iconAnchor: [16, 32],
+    popupAnchor: [0, -34],
   });
 };
 
@@ -57,6 +58,7 @@ const createCompletedStopIcon = () => L.divIcon({
   </div>`,
   iconSize: [32, 32],
   iconAnchor: [16, 32],
+  popupAnchor: [0, -34],
 });
 
 const MapLayer = () => {

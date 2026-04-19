@@ -79,7 +79,6 @@ function setupWebSocket(wss) {
       stop_delay_probabilities: rec.stop_delay_probabilities,
       impact:                   rec.impact,
       route_geojson:            rec.route_geojson,
-      status:                   'pending'
     };
 
     wss.clients.forEach((client) => {
@@ -120,9 +119,13 @@ function setupWebSocket(wss) {
       if (!courierState[courierId]) {
         courierState[courierId] = {
           lastPoint:             null,
+          lastPosition:          null,
           accumulatedDistanceKM: 0,
           segmentStartTime:      Date.now()
         };
+      } else if (token && courierState[courierId].lastPosition) {
+        // New frontend tab connected — replay the last known position so the dot appears immediately
+        ws.send(JSON.stringify({ type: 'VEHICLE_TELEMETRY', payload: courierState[courierId].lastPosition }));
       }
     }
 
@@ -207,14 +210,13 @@ function setupWebSocket(wss) {
           const currentPoint = turf.point([data.lon, data.lat]);
           const speed        = data.currentSpeed ?? 0;
 
-          // 1. Always broadcast live position to all connected frontend tabs for this courier
+          // 1. Cache position and broadcast to all connected frontend tabs for this courier
+          const telemetryPayload = { id: ws.courierId, lat: data.lat, lng: data.lon, speed, routeStatus: 'on-time' };
+          courierState[ws.courierId].lastPosition = telemetryPayload;
           wss.clients.forEach((client) => {
             if (client.readyState !== 1) return;
             if (client.role === 'courier' && client.courierId === ws.courierId) {
-              client.send(JSON.stringify({
-                type:    'VEHICLE_TELEMETRY',
-                payload: { id: ws.courierId, lat: data.lat, lng: data.lon, speed, routeStatus: 'on-time' },
-              }));
+              client.send(JSON.stringify({ type: 'VEHICLE_TELEMETRY', payload: telemetryPayload }));
             }
           });
 
@@ -311,7 +313,7 @@ function setupWebSocket(wss) {
         // ROUTE APPROVAL — courier approves AI recommendation
         // ------------------------------------------------------------------
         if (data.type === 'APPROVE_ROUTE') {
-          const { routeId, recommendedStopsOrder } = data.payload || {};
+          const { routeId, recId, recommendedStopsOrder } = data.payload || {};
 
           if (!routeId || !Array.isArray(recommendedStopsOrder)) {
             ws.send(JSON.stringify({ type: 'APPROVAL_ERROR', error: 'Invalid payload' }));
@@ -331,7 +333,7 @@ function setupWebSocket(wss) {
               ['IN_TRANSIT', JSON.stringify({ approvedAt: new Date().toISOString() }), routeId]
             );
             await db.query('COMMIT');
-            ws.send(JSON.stringify({ type: 'APPROVAL_SUCCESS', routeId }));
+            ws.send(JSON.stringify({ type: 'ROUTE_SYNC_CONFIRMED', payload: { id: recId, status: 'Applied' } }));
           } catch (error) {
             await db.query('ROLLBACK');
             console.error('Error approving route', error);
@@ -343,7 +345,7 @@ function setupWebSocket(wss) {
         // ROUTE REFUSAL — no DB change, just acknowledge
         // ------------------------------------------------------------------
         if (data.type === 'REFUSE_ROUTE') {
-          ws.send(JSON.stringify({ type: 'REFUSE_ROUTE_ACK', id: data.payload?.id }));
+          ws.send(JSON.stringify({ type: 'ROUTE_SYNC_CONFIRMED', payload: { id: data.payload?.id, status: 'removed' } }));
         }
 
       } catch (err) {

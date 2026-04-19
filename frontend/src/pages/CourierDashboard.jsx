@@ -52,7 +52,7 @@ const CourierDashboard = () => {
         <div className="left-alerts-panel">
           <div className="alerts-stack">
             {pendingRecommendations.map(rec => (
-              <ActionCard key={rec.id} recommendation={rec} />
+              <ActionCard key={rec.id} recommendation={rec} sendMessage={sendMessage} />
             ))}
           </div>
         </div>

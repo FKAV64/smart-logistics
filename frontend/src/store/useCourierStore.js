@@ -57,7 +57,7 @@ export const useCourierStore = create((set) => ({
 
       return {
         deliveries,
-        pendingRecommendations: [...filtered, { ...suggestionPayload, status: 'pending' }],
+        pendingRecommendations: [...filtered, { ...suggestionPayload, status: null }],
       };
     }),
 

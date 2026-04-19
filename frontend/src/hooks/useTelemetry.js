@@ -67,7 +67,9 @@ export const useTelemetry = () => {
               updateVehicleTelemetry(data.payload);
               break;
             case 'AI_ROUTE_RECOMMENDATION':
-              addRecommendation(data.payload);
+              if (data.payload.action_type !== 'CONTINUE') {
+                addRecommendation(data.payload);
+              }
               break;
             case 'ROUTE_SYNC_CONFIRMED':
               confirmRecommendationSync(data.payload.id, data.payload.status);
