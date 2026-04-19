@@ -5,6 +5,13 @@ const PORT = process.env.PORT || 7777;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+const FRC_ROAD_TYPES = {
+  'FRC0': 'highway', 'FRC1': 'highway',
+  'FRC2': 'urban',   'FRC3': 'urban',
+  'FRC4': 'rural',   'FRC5': 'rural',
+  'FRC6': 'mountain','FRC7': 'mountain',
+};
+
 /** Traffic congestion factor 0 (free flow) → 1 (gridlock), driven by time of day */
 function getTrafficFactor() {
   if (process.env.FORCE_CONGESTION === 'true') return 0.90; // Demo mode: always HEAVY traffic
@@ -60,6 +67,7 @@ app.get('/traffic/services/4/flowSegmentData/:style/:zoom/json', (req, res) => {
       confidence:         parseFloat((0.82 + Math.random() * 0.18).toFixed(2)),
       roadClosure,
       trafficLevel:       speedToLevel(currentSpeed),
+      road_type:          FRC_ROAD_TYPES['FRC3'],
     },
   });
 });

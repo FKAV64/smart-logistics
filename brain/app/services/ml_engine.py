@@ -87,6 +87,7 @@ class MLEngine:
             'weather_condition': self._safe_get(env.get('weather_condition'), 'weather_condition'),
             'traffic_level':     self._safe_get(env.get('traffic_level'),     'traffic_level'),
             'time_bucket':       self._safe_get(env.get('time_bucket'),       'time_bucket'),
+            'road_type':         self._safe_get(env.get('road_type', 'urban'), 'road_type'),
         }
 
     def predict_segment_delays(self, payload: dict, map_graph) -> nx.DiGraph:
@@ -110,7 +111,7 @@ class MLEngine:
         for u, v, data in edges:
             dist_km     = data.get('distance_km', 0.1)
             planned_min = (dist_km / base_speed_kmh) * 60.0 if base_speed_kmh > 0 else 1.0
-            road_type   = 'urban' if dist_km < 1.0 else 'highway'
+            road_type   = env['road_type']
 
             edge_data.append({
                 'road_type':             road_type,

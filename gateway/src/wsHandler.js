@@ -37,6 +37,7 @@ async function fetchEnvironment(lat, lon) {
       time_bucket:       getTimeBucket(),
       temperature_c:     c.temperature_c,
       incident_reported: f.roadClosure,
+      road_type:         f.road_type || 'urban',
     };
   } catch {
     return {
@@ -45,11 +46,12 @@ async function fetchEnvironment(lat, lon) {
       time_bucket:       getTimeBucket(),
       temperature_c:     15.0,
       incident_reported: false,
+      road_type:         'urban',
     };
   }
 }
 
-function buildStops(rows) {
+function buildStops(rows, roadType = 'urban') {
   return rows.map((s, i) => ({
     stop_id:           s.stop_id,
     lat:               parseFloat(s.latitude),
@@ -57,7 +59,7 @@ function buildStops(rows) {
     window_start:      s.time_window_open,
     window_end:        s.time_window_close,
     current_order:     s.delivery_order ?? (i + 1),
-    road_type:         'urban',
+    road_type:         roadType,
     package_weight_kg: parseFloat(s.package_weight_kg) || 5.0
   }));
 }
@@ -188,7 +190,7 @@ function setupWebSocket(wss) {
                 timestamp: new Date().toISOString()
               },
               environment_horizon:  env,
-              unvisited_stops:      buildStops(result.rows)
+              unvisited_stops:      buildStops(result.rows, env.road_type)
             }));
             console.log(`[HEALTH CHECK] Pushed to Brain for ${ws.courierId}`);
 
@@ -247,7 +249,7 @@ function setupWebSocket(wss) {
                     vehicle_type:        (ws.vehicleType || 'van').toLowerCase(),
                     current_location:    { lat: data.lat, lon: data.lon, timestamp: new Date().toISOString() },
                     environment_horizon: { ...env, incident_reported: true },
-                    unvisited_stops:     buildStops(stopsResult.rows),
+                    unvisited_stops:     buildStops(stopsResult.rows, env.road_type),
                   }));
                   console.log(`[TRAFFIC ALERT] 5km-ahead congestion for ${ws.courierId} (${env.traffic_level})`);
                 }

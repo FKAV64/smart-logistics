@@ -86,6 +86,7 @@ Every incoming Redis message triggers the full AI pipeline and publishes a respo
 4. ml_engine.py → predict_segment_delays(payload, map_graph)
    ├── Iterates over every street edge in the NetworkX graph
    ├── Computes base travel time from physical edge distance_km
+   ├── road_type sourced from environment_horizon.road_type (TomTom FRC via Gateway)
    └── XGBoost regressor → predicted_delay_min per edge
        (edge 'weight' = planned_travel_min + predicted_delay_min)
 
@@ -118,7 +119,7 @@ Every incoming Redis message triggers the full AI pipeline and publishes a respo
 | Event Type | Trigger |
 |---|---|
 | `ROUTINE_HEALTH_CHECK` | Fired by the gateway immediately when a courier connects and requests their daily manifest |
-| `TRAFFIC_ALERT` | Fired when a courier's GPS speed drops below 10 km/h (gateway detects gridlock) |
+| `TRAFFIC_ALERT` | Fired when a traffic jam is detected 5km ahead of the courier position |
 
 ---
 
@@ -173,7 +174,7 @@ Two separate XGBoost models are trained and served. Both share the same 11-featu
 
 | Feature | Source | Type | Description |
 |---|---|---|---|
-| `road_type` | Per-stop payload | categorical | `highway`, `urban`, `rural`, `mountain` |
+| `road_type` | Per-stop payload + `environment_horizon.road_type` (TomTom FRC) | categorical | `highway`, `urban`, `rural`, `mountain` |
 | `vehicle_type` | Payload root | categorical | `van`, `truck`, `motorcycle`, `car` |
 | `weather_condition` | `environment_horizon` | categorical | `clear`, `cloudy`, `rain`, `snow`, `fog`, `wind` |
 | `traffic_level` | `environment_horizon` | categorical | `low`, `moderate`, `high`, `congested` |
@@ -242,13 +243,14 @@ Fixed 13-minute dwell time is added at every stop after arrival. This is the ave
 
 Arriving after `window_end` incurs a **+10,000-minute** cost penalty in the TSP optimizer — effectively making it mathematically preferable to take any route that avoids the violation.
 
-### Road Type Derivation
+### Road Type
 
-For **segment scoring** (street edges), `road_type` is inferred from physical edge length:
-- `urban` if `distance_km < 1.0`
-- `highway` otherwise
+`road_type` (`highway | urban | rural | mountain`) is sourced from the TomTom mock FRC field and forwarded by the Gateway in two places:
 
-For **stop probability scoring**, `road_type` is taken directly from the stop's `road_type` field (passed in from the gateway payload), defaulting to `urban`.
+- **`environment_horizon.road_type`** — area-wide classification used for **segment scoring** (all street edges in the Dijkstra graph receive this value)
+- **Per-stop `road_type`** in each `unvisited_stops` entry — used for **stop probability scoring**
+
+The Brain never derives road type internally. It uses whatever the Gateway sends, which is mapped from TomTom's Functional Road Class (FRC3 → `urban` for Sivas city roads).
 
 ---
 

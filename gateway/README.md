@@ -86,6 +86,24 @@ On each GPS ping, if a previous point exists, the handler computes a bearing usi
 **PostGIS street name lookup:**
 The `GET_DAILY_MANIFEST` SQL uses a `LEFT JOIN LATERAL` with the KNN operator `<->` to find the nearest road segment name for each delivery stop. Falls back gracefully if the `segments` table is empty.
 
+**`fetchEnvironment(lat, lon)` return fields:**
+
+| Field | Source | Description |
+|---|---|---|
+| `weather_condition` | TomTom weather API | Mapped to Brain categories: `clear`, `cloudy`, `rain`, `fog`, `snow` |
+| `traffic_level` | TomTom traffic API | Mapped to Brain categories: `low`, `moderate`, `high`, `congested` |
+| `time_bucket` | Server clock | `morning_rush`, `midday`, `evening_rush`, `night`, `early_morning` |
+| `temperature_c` | TomTom weather API | Degrees Celsius |
+| `incident_reported` | TomTom `roadClosure` | Boolean |
+| `road_type` | TomTom `frc` field via `FRC_ROAD_TYPES` map | `highway`, `urban`, `rural`, `mountain` |
+
+**`buildStops(rows, roadType)` output per stop:**
+
+| Field | Source |
+|---|---|
+| `stop_id`, `lat`, `lon`, `window_start`, `window_end`, `current_order`, `package_weight_kg` | Database |
+| `road_type` | `fetchEnvironment().road_type` — TomTom FRC mapping, not hardcoded |
+
 ---
 
 ### `src/redisClient.js` — Redis Pub/Sub Bridge

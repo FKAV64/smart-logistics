@@ -17,6 +17,7 @@ class EnvironmentHorizon(BaseModel):
     time_bucket: str       = Field(..., description="ML Feature: morning, midday, evening, night")
     temperature_c: float   = Field(..., description="ML Feature: Current temperature in Celsius")
     incident_reported: bool = Field(..., description="ML Feature: True if a crash/roadblock is reported ahead (maps to road_incident=1)")
+    road_type: str          = Field(default='urban', description="ML Feature: Area road classification — highway, urban, rural, mountain. Sourced from TomTom FRC.")
 
 class Stop(BaseModel):
     """
