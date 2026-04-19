@@ -2,7 +2,7 @@ import os
 import json
 import redis
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.services.ml_engine import MLEngine
 from app.services.routing import RouteOptimizer
@@ -61,11 +61,25 @@ class RedisWorker:
 
         try:
             unvisited_stops  = message_data.get('unvisited_stops', [])
+            current_loc      = message_data.get('current_location', {})
             courier_status   = message_data.get('courier_status', 'EN_ROUTE')
             current_time_iso = message_data.get(
                 'current_time_iso',
                 datetime.utcnow().isoformat() + "Z"
             )
+
+            # Inject Courier Start Position to generate contiguous route from vehicle to Stop 1
+            if current_loc and current_loc.get('lat') and current_loc.get('lon'):
+                # Check if it's already there to avoid duplicates
+                if not unvisited_stops or unvisited_stops[0].get('stop_id') != 'COURIER_START':
+                    stop_0 = {
+                        'stop_id': 'COURIER_START',
+                        'lat': current_loc['lat'],
+                        'lon': current_loc['lon'],
+                        'window_start': current_time_iso,
+                        'window_end': (datetime.utcnow() + timedelta(hours=24)).isoformat() + "Z"
+                    }
+                    unvisited_stops.insert(0, stop_0)
 
             # Compute per-stop delay probabilities
             stop_probs = self.ml_engine.predict_stop_probabilities(

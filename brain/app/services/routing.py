@@ -117,7 +117,10 @@ class RouteOptimizer:
         
         for _ in range(50): # Reduced iterations for graph computation speed
             new_seq = copy.deepcopy(best_sequence)
-            idx1, idx2 = random.sample(range(len(new_seq)), 2)
+            start_idx = 1 if len(new_seq) > 0 and new_seq[0].get('stop_id') == 'COURIER_START' else 0
+            if len(new_seq) - start_idx < 2:
+                break
+            idx1, idx2 = random.sample(range(start_idx, len(new_seq)), 2)
             new_seq[idx1], new_seq[idx2] = new_seq[idx2], new_seq[idx1]
             
             new_cost, new_delay, new_late, wkt_segs = self._evaluate_sequence(new_seq, scored_graph, start_time)
@@ -142,7 +145,7 @@ class RouteOptimizer:
 
         return {
             "is_reordered": is_reordered,
-            "new_sequence_ids": [s['stop_id'] for s in best_sequence],
+            "new_sequence_ids": [s['stop_id'] for s in best_sequence if s['stop_id'] != 'COURIER_START'],
             "time_saved": int(time_saved),
             "max_delay": int(best_delay),
             "minutes_late": int(best_late),

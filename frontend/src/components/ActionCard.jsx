@@ -46,15 +46,13 @@ const ActionCard = ({ recommendation, sendMessage }) => {
 
   const sevLower = (severity || '').toLowerCase().replace(/-/g, '');
   const isCritical = sevLower === 'critical';
-  const isReroute  = sevLower === 'reroute';
+  const isReroute  = action_type && action_type.toLowerCase() === 're-route'; // Fix: based on action_type, not severity
 
   const getStatusClass = () => {
-    switch (sevLower) {
-      case 'reroute':  return 'status-reroute';
-      case 'critical': return 'status-critical';
-      case 'info':     return 'status-info';
-      default:         return 'status-on-time';
-    }
+    if (isCritical) return 'status-critical';
+    if (isReroute) return 'status-reroute';
+    if (sevLower === 'medium') return 'status-info';
+    return 'status-on-time';
   };
 
   const getLabel = () => (severity || 'NORMAL').toUpperCase().replace(/-/g, '');
@@ -89,7 +87,7 @@ const ActionCard = ({ recommendation, sendMessage }) => {
     >
       <div className="card-header">
         <h3 className="vehicle-id">System Update</h3>
-        <span className="severity-badge">{getLabel()}</span>
+        <span className="severity-badge">{action_type ? action_type.replace(/_/g, ' ') : getLabel()}</span>
       </div>
 
       <div className="card-body">
@@ -150,7 +148,7 @@ const ActionCard = ({ recommendation, sendMessage }) => {
               ) : status === 'Syncing...' ? (
                 <><RotateCw size={16} className="spin" /> Syncing</>
               ) : (
-                'Approve Swap'
+                action_type === 'RE-ROUTE' ? 'Approve Swap' : 'Acknowledge'
               )}
             </button>
             <button

@@ -21,6 +21,45 @@ export const useCourierStore = create((set) => ({
   updateVehicleTelemetry: (telemetryData) =>
     set((state) => {
       const existingVehicleIndex = state.vehicles.findIndex((v) => v.id === telemetryData.id);
+      
+      let newActiveRoutes = state.activeRoutes;
+      
+      // Progressive route vanishing: slice the activeRoutes polyline dynamically to remove segments behind the vehicle
+      if (newActiveRoutes.length > 0 && newActiveRoutes[0]?.geometry?.coordinates) {
+        let coords = newActiveRoutes[0].geometry.coordinates;
+        const isMultiLine = newActiveRoutes[0].geometry.type === 'MultiLineString';
+        if (isMultiLine) {
+          coords = coords.flat(1);
+        }
+        
+        let closestIdx = 0;
+        let minDistance = Infinity;
+        
+        for (let i = 0; i < coords.length; i++) {
+          const dx = coords[i][0] - telemetryData.lng;
+          const dy = coords[i][1] - telemetryData.lat;
+          const d2 = dx*dx + dy*dy;
+          if (d2 < minDistance) {
+            minDistance = d2;
+            closestIdx = i;
+          }
+        }
+        
+        // 0.0005 ≈ 50 meters tolerance. Protects against slicing on erratic GPS spikes
+        if (minDistance < 0.0005) {
+          const updatedGeoJSON = JSON.parse(JSON.stringify(newActiveRoutes[0]));
+          
+          if (isMultiLine) {
+            // Repackage into a simplified MultiLineString to prevent Leaflet structure errors
+            updatedGeoJSON.geometry.coordinates = [coords.slice(closestIdx)];
+          } else {
+            updatedGeoJSON.geometry.coordinates = coords.slice(closestIdx);
+          }
+          
+          newActiveRoutes = [updatedGeoJSON];
+        }
+      }
+
       if (existingVehicleIndex >= 0) {
         const updatedVehicles = [...state.vehicles];
         updatedVehicles[existingVehicleIndex] = {
@@ -28,10 +67,11 @@ export const useCourierStore = create((set) => ({
           ...telemetryData,
           lastPingTimestamp: Date.now(),
         };
-        return { vehicles: updatedVehicles };
+        return { vehicles: updatedVehicles, activeRoutes: newActiveRoutes };
       } else {
         return {
           vehicles: [...state.vehicles, { ...telemetryData, lastPingTimestamp: Date.now() }],
+          activeRoutes: newActiveRoutes
         };
       }
     }),

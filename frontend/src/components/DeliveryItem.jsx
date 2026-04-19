@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock, MapPin, Phone, ShieldCheck, CheckCircle2, Navigation } from 'lucide-react';
+import { Clock, MapPin, Phone, ShieldCheck, CheckCircle2, Navigation, User } from 'lucide-react';
 import './DeliveryItem.css';
 
 const DeliveryItem = ({ delivery, isActive, isCompleted }) => {
@@ -39,12 +39,12 @@ const DeliveryItem = ({ delivery, isActive, isCompleted }) => {
 
       <div className="delivery-card-body">
         <div className="delivery-detail">
-          <MapPin size={16} className={isCompleted ? 'icon-dim' : 'icon-blue'} />
+          <User size={16} className={isCompleted ? 'icon-dim' : 'icon-blue'} />
           <span className={`destination-text ${isCompleted ? 'text-dim' : ''}`}>{destination}</span>
         </div>
         {address && (
           <div className="delivery-detail">
-            <Navigation size={16} className="icon-dim" />
+            <MapPin size={16} className="icon-dim" />
             <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>{address}</span>
           </div>
         )}

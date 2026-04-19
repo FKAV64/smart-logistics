@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, GeoJSON, Popup, FeatureGroup } from 'react-leaflet';
+import React, { useEffect, useState } from 'react';
+import { MapContainer, TileLayer, Marker, Polyline, GeoJSON, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useCourierStore } from '../store/useCourierStore';
@@ -134,7 +134,7 @@ const MapLayer = () => {
         };
 
         return (
-          <FeatureGroup key={vehicle.id}>
+          <React.Fragment key={vehicle.id}>
             {/* Draw the road the vehicle is taking! */}
             {vehicle.currentRoute && (
               <Polyline 
@@ -143,7 +143,7 @@ const MapLayer = () => {
               />
             )}
             <Marker 
-              position={[vehicle.lat, vehicle.lng]} 
+              position={[Number(vehicle.lat), Number(vehicle.lng)]} 
               icon={createVehicleIcon(status)}
             >
               <Popup>
@@ -152,7 +152,7 @@ const MapLayer = () => {
                 <strong>Speed:</strong> {vehicle.speed} km/h
               </Popup>
             </Marker>
-          </FeatureGroup>
+          </React.Fragment>
         );
       })}
     </MapContainer>
