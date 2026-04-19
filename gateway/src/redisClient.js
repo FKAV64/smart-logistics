@@ -21,7 +21,7 @@ subClient.on('message', (channel, message) => {
   if (channel === 'route_optimizations_channel') {
     try {
       const data = JSON.parse(message);
-      // Emit event for dispatchers to catch
+      // Emit event for gateway to forward to courier
       aiEvents.emit('optimization_received', data);
     } catch (e) {
       console.error('Error parsing route optimization message from AI', e);

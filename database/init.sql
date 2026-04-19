@@ -5,14 +5,6 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 -- DOMAIN 1: OPERATIONAL ENTITIES
 -- ==========================================
 
-CREATE TABLE admins (
-    admin_id SERIAL PRIMARY KEY,
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL
-);
-
 CREATE TABLE couriers (
     courier_id VARCHAR(50) PRIMARY KEY,
     first_name VARCHAR(100) NOT NULL,
@@ -135,10 +127,10 @@ INSERT INTO couriers (courier_id, first_name, last_name, email, password, vehicl
 VALUES ('DRV-884', 'John', 'Doe', 'johndoe@smartlogistics.com', '$2a$10$0qO50EutX1h.ojzwFnptHOicHs4m3Qg45YK6ll2EoYxytSqU6MYHy', 'Van')
 ON CONFLICT (courier_id) DO NOTHING;
 
-INSERT INTO clients (client_id, first_name, last_name, email) VALUES 
-('CLI-001', 'Ali', 'Yilmaz', 'ali.yilmaz@test.com'),
-('CLI-002', 'Ayse', 'Demir', 'ayse.demir@test.com'),
-('CLI-003', 'Mehmet', 'Kaya', 'mehmet.kaya@test.com')
+INSERT INTO clients (client_id, first_name, last_name, email, phone) VALUES
+('CLI-001', 'Ali', 'Yilmaz', 'ali.yilmaz@test.com', '+90 346 111 2233'),
+('CLI-002', 'Ayse', 'Demir', 'ayse.demir@test.com', '+90 346 222 3344'),
+('CLI-003', 'Mehmet', 'Kaya', 'mehmet.kaya@test.com', '+90 346 333 4455')
 ON CONFLICT (client_id) DO NOTHING;
 
 INSERT INTO client_commande_detail (commande_id, client_id, weight_kg, window_start, window_end, lat, lon) VALUES 

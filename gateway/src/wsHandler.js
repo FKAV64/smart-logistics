@@ -50,10 +50,6 @@ function setupWebSocket(wss) {
     wss.clients.forEach((client) => {
       if (client.readyState !== 1) return;
 
-      if (client.role === 'DISPATCHER') {
-        client.send(JSON.stringify({ type: 'AI_ROUTE_RECOMMENDATION', payload: frontendPayload }));
-      }
-
       if (client.role === 'courier' && client.courierId === data.courier_id) {
         client.send(JSON.stringify({ type: 'AI_ROUTE_RECOMMENDATION', payload: frontendPayload }));
         if (rec.route_geojson) {
@@ -105,11 +101,24 @@ function setupWebSocket(wss) {
           console.log(`[HEALTH CHECK] Fetching stops for: ${ws.courierId}`);
           try {
             const result = await db.query(
-              `SELECT stop_id, latitude, longitude, delivery_order,
-                      time_window_open, time_window_close, package_weight_kg, manifest_id
-               FROM active_courier_stops
-               WHERE courier_id = $1 AND status = 'PENDING'
-               ORDER BY delivery_order ASC`,
+              `SELECT
+                 ms.stop_id::text          AS stop_id,
+                 ccd.lat                   AS latitude,
+                 ccd.lon                   AS longitude,
+                 ms.delivery_order,
+                 ccd.window_start          AS time_window_open,
+                 ccd.window_end            AS time_window_close,
+                 ccd.weight_kg             AS package_weight_kg,
+                 dm.manifest_id,
+                 ms.delivery_status        AS status,
+                 c.first_name              AS client_first_name,
+                 c.phone                   AS client_phone
+               FROM manifest_stops ms
+               JOIN daily_manifest         dm  ON ms.manifest_id = dm.manifest_id
+               JOIN client_commande_detail ccd ON ms.commande_id  = ccd.commande_id
+               JOIN clients               c   ON ccd.client_id   = c.client_id
+               WHERE dm.courier_id = $1 AND ms.delivery_status = 'PENDING'
+               ORDER BY ms.delivery_order ASC`,
               [ws.courierId]
             );
 
@@ -233,7 +242,7 @@ function setupWebSocket(wss) {
         }
 
         // ------------------------------------------------------------------
-        // ROUTE APPROVAL — dispatcher or courier approves AI recommendation
+        // ROUTE APPROVAL — courier approves AI recommendation
         // ------------------------------------------------------------------
         if (data.type === 'APPROVE_ROUTE') {
           const { routeId, recommendedStopsOrder } = data.payload || {};

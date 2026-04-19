@@ -30,7 +30,6 @@ export const useTelemetry = () => {
     const connectWebSocket = () => {
       const token = localStorage.getItem('token');
 
-      // Use JWT token if available (authenticated courier), else fall back to role+id (admin)
       const wsUrl = token
         ? `${SOCKET_URL}?token=${encodeURIComponent(token)}`
         : `${SOCKET_URL}?id=${userId}`;
@@ -48,17 +47,17 @@ export const useTelemetry = () => {
           const data = JSON.parse(event.data);
           switch (data.type) {
             case 'DAILY_MANIFEST_LOADED': {
-              // Normalise DB rows → delivery card format
+              const fmt = (ts) =>
+                ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--';
               const deliveries = data.payload.stops.map((stop) => ({
-                id: `STOP-${stop.stop_id}`,
-                lat: stop.latitude,
-                lng: stop.longitude,
-                time: stop.time_window_open
-                  ? new Date(stop.time_window_open).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                  : '--:--',
-                destination: `Stop #${stop.delivery_order} (${stop.latitude.toFixed(4)}, ${stop.longitude.toFixed(4)})`,
-                clientNumber: '',
-                urgency: stop.delivery_order,
+                id:           `STOP-${stop.stop_id}`,
+                lat:          stop.latitude,
+                lng:          stop.longitude,
+                time:         fmt(stop.time_window_open),
+                timeEnd:      fmt(stop.time_window_close),
+                destination:  stop.client_first_name,
+                clientNumber: stop.client_phone || '',
+                urgency:      stop.delivery_order,
               }));
               setDeliveries(deliveries);
               break;

@@ -78,8 +78,8 @@ const MapLayer = () => {
             icon={createStopIcon()}
           >
             <Popup>
-              <strong>Stop: {stop.id}</strong><br/>
-              {stop.destination}
+              <strong>{stop.destination}</strong><br/>
+              {stop.clientNumber && <span>{stop.clientNumber}</span>}
             </Popup>
           </Marker>
         )
