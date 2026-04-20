@@ -34,11 +34,10 @@ def seed_map_if_empty():
             conn.close()
             return
             
-        # Download the full drivable road network for Sivas city using the official
-        # administrative boundary from OpenStreetMap. This covers the complete urban
-        # geography that the ML model was trained on, including all districts and
-        # peripheral roads — not just the tight urban core.
-        G = ox.graph_from_place("Sivas, Turkey", network_type='drive')
+        # Use graph_from_point with a tight radius centered on the delivery zone.
+        # This avoids Overpass area subdivision issues and downloads in seconds.
+        center_point = (39.745, 37.015)  # midpoint between courier start and last stop
+        G = ox.graph_from_point(center_point, dist=2500, network_type='drive')
         
         # Convert the structural graph into usable GeoDataFrames
         nodes, edges = ox.graph_to_gdfs(G)

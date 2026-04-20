@@ -10,8 +10,8 @@ const WAYPOINTS = [
   { lat: 39.7600, lon: 37.0100, name: 'Mehmet', stop_id: 3 },
 ];
 
-const VAN_SPEED_KMPH = 22.5;   // from brain SPEED_PROFILES
-const PING_INTERVAL_MS = 5_000;
+const VAN_SPEED_KMPH = 60;     // demo speed: fast but stops are still reachable
+const PING_INTERVAL_MS = 3_000;
 const DIST_PER_PING_KM = VAN_SPEED_KMPH * (PING_INTERVAL_MS / 1000 / 3600); // ≈ 0.1875 km
 
 // Depot: ~3.4 km south of delivery area — clearly visible starting position on the Sivas map

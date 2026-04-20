@@ -93,15 +93,15 @@ const ActionCard = ({ recommendation, sendMessage }) => {
       <div className="card-body">
         <p className="reason-text"><strong>Context:</strong> {reason}</p>
 
-        {impact && (
+        {recommendation.route_health && (
           <div className="impact-grid">
             <div className="impact-item">
               <RouteIcon size={16} />
-              <span>Health: {impact.route_health}</span>
+              <span>Health: {recommendation.route_health === 'OPTIMAL' ? 'Optimal' : recommendation.route_health}</span>
             </div>
             <div className="impact-item">
               <Clock size={16} />
-              <span>Saves {impact.time_saved_minutes} mins</span>
+              <span>Saves {recommendation.time_saved_minutes || 0} mins</span>
             </div>
           </div>
         )}
@@ -117,49 +117,29 @@ const ActionCard = ({ recommendation, sendMessage }) => {
       </div>
 
       <div className="card-footer">
-        {isCritical ? (
+        <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
           <button
-            className={`btn ${status === 'Sent' ? 'btn-success' : status === 'Syncing...' ? 'btn-warning' : 'btn-danger'}`}
-            onClick={() => {
-              if (status) return;
-              setRecommendationSyncing(id);
-              sendMessage({ type: 'SEND_EMAIL', payload: { id, vehicleId } });
-            }}
+            className={`btn ${status === 'Applied' ? 'btn-success' : status === 'Syncing...' ? 'btn-warning' : 'btn-primary'}`}
+            style={{ flex: 1 }}
+            onClick={handleApprove}
             disabled={!!status}
           >
-            {status === 'Sent' ? (
-              <><CheckCircle size={16} /> SENT!</>
+            {status === 'Applied' ? (
+              <><CheckCircle size={16} /> Applied</>
             ) : status === 'Syncing...' ? (
-              <><RotateCw size={16} className="spin" /> SENDING...</>
+              <><RotateCw size={16} className="spin" /> Syncing</>
             ) : (
-              <><Mail size={16} /> SEND EMAIL</>
+              action_type === 'RE-ROUTE' ? 'Approve Swap' : 'Approve'
             )}
           </button>
-        ) : (
-          <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
-            <button
-              className={`btn ${status === 'Applied' ? 'btn-success' : status === 'Syncing...' ? 'btn-warning' : 'btn-primary'}`}
-              style={{ flex: 1 }}
-              onClick={handleApprove}
-              disabled={!!status}
-            >
-              {status === 'Applied' ? (
-                <><CheckCircle size={16} /> Applied</>
-              ) : status === 'Syncing...' ? (
-                <><RotateCw size={16} className="spin" /> Syncing</>
-              ) : (
-                action_type === 'RE-ROUTE' ? 'Approve Swap' : 'Acknowledge'
-              )}
-            </button>
-            <button
-              className="btn btn-danger"
-              style={{ flex: 1, display: status ? 'none' : 'flex' }}
-              onClick={handleRefuse}
-            >
-              Refuse
-            </button>
-          </div>
-        )}
+          <button
+            className="btn btn-danger"
+            style={{ flex: 1, display: status ? 'none' : 'flex' }}
+            onClick={handleRefuse}
+          >
+            Refuse
+          </button>
+        </div>
       </div>
     </div>
   );

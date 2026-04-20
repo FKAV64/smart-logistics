@@ -78,6 +78,8 @@ function setupWebSocket(wss) {
       new_sequence:             rec.new_sequence,
       stop_delay_probabilities: rec.stop_delay_probabilities,
       impact:                   rec.impact,
+      route_health:             rec.impact?.route_health || null,
+      time_saved_minutes:       rec.impact?.time_saved_minutes || 0,
       route_geojson:            rec.route_geojson,
     };
 

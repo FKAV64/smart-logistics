@@ -24,39 +24,16 @@ export const useCourierStore = create((set) => ({
       
       let newActiveRoutes = state.activeRoutes;
       
-      // Progressive route vanishing: slice the activeRoutes polyline dynamically to remove segments behind the vehicle
+      // Repackage OSMNx nested MultiLineStrings into standard LineStrings
+      // Leaflet GeoJSON drops complex multi-arrays softly. The AI backend implicitly trims the start 
+      // of the route organically via point-injection, achieving our vanishing trace safely!
       if (newActiveRoutes.length > 0 && newActiveRoutes[0]?.geometry?.coordinates) {
-        let coords = newActiveRoutes[0].geometry.coordinates;
-        const isMultiLine = newActiveRoutes[0].geometry.type === 'MultiLineString';
-        if (isMultiLine) {
-          coords = coords.flat(1);
-        }
-        
-        let closestIdx = 0;
-        let minDistance = Infinity;
-        
-        for (let i = 0; i < coords.length; i++) {
-          const dx = coords[i][0] - telemetryData.lng;
-          const dy = coords[i][1] - telemetryData.lat;
-          const d2 = dx*dx + dy*dy;
-          if (d2 < minDistance) {
-            minDistance = d2;
-            closestIdx = i;
-          }
-        }
-        
-        // 0.0005 ≈ 50 meters tolerance. Protects against slicing on erratic GPS spikes
-        if (minDistance < 0.0005) {
-          const updatedGeoJSON = JSON.parse(JSON.stringify(newActiveRoutes[0]));
-          
-          if (isMultiLine) {
-            // Repackage into a simplified MultiLineString to prevent Leaflet structure errors
-            updatedGeoJSON.geometry.coordinates = [coords.slice(closestIdx)];
-          } else {
-            updatedGeoJSON.geometry.coordinates = coords.slice(closestIdx);
-          }
-          
-          newActiveRoutes = [updatedGeoJSON];
+        if (newActiveRoutes[0].geometry.type === 'MultiLineString') {
+          const flatCoords = newActiveRoutes[0].geometry.coordinates.flat(1);
+          const sanitizedRoute = JSON.parse(JSON.stringify(newActiveRoutes[0]));
+          sanitizedRoute.geometry.type = 'LineString';
+          sanitizedRoute.geometry.coordinates = flatCoords;
+          newActiveRoutes = [sanitizedRoute];
         }
       }
 
@@ -127,6 +104,14 @@ export const useCourierStore = create((set) => ({
   removeRecommendation: (id) =>
     set((state) => ({
       pendingRecommendations: state.pendingRecommendations.filter((rec) => rec.id !== id),
+    })),
+
+  // Called when Brain publishes CONTINUE — clears any stale alert card for the vehicle
+  resolveRecommendationForVehicle: (vehicleId) =>
+    set((state) => ({
+      pendingRecommendations: state.pendingRecommendations.filter(
+        (rec) => rec.vehicleId !== vehicleId
+      ),
     })),
 
 

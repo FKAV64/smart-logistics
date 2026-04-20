@@ -67,7 +67,10 @@ export const useTelemetry = () => {
               updateVehicleTelemetry(data.payload);
               break;
             case 'AI_ROUTE_RECOMMENDATION':
-              if (data.payload.action_type !== 'CONTINUE') {
+              if (data.payload.action_type === 'CONTINUE') {
+                // Brain says all clear — dismiss any stale alert card for this vehicle
+                useCourierStore.getState().resolveRecommendationForVehicle(data.payload.vehicleId);
+              } else {
                 addRecommendation(data.payload);
               }
               break;

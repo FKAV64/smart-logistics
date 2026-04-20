@@ -77,8 +77,8 @@ services:
     environment:
       COURIER_ID: DRV-884
       GATEWAY_URL: ws://gateway:3000
-      START_LAT: "39.7200"
-      START_LON: "37.0100"
+      START_LAT: "39.7464"
+      START_LON: "37.0150"
     depends_on:
       - gateway
     restart: "no"
@@ -90,6 +90,7 @@ services:
     environment:
       ENVIRONMENT: dev
       REDIS_URL: redis://redis:6379
+      PYTHONUNBUFFERED: "1"
     ports:
       - "8001:8000"
     depends_on:
