@@ -291,6 +291,9 @@ brain/
 │   ├── 01_data_exploration.ipynb   # EDA on the training dataset
 │   └── 02_train_xgboost.ipynb      # XGBoost training pipeline (regressor + classifier)
 │
+├── scripts/
+│   └── test_event.py           # End-to-end test script — fires all 4 action types
+│
 ├── trained_models/
 │   ├── xgboost_delay_model.pkl     # XGBoost regressor (delay minutes per segment)
 │   ├── xgboost_prob_model.pkl      # XGBoost classifier (P(delay > 10 min) per stop)
@@ -430,3 +433,64 @@ POST http://localhost:8000/api/optimize
 Content-Type: application/json
 ```
 See `app/models/schemas.py` for the full request body schema.
+
+---
+
+## End-to-End Testing with `test_event.py`
+
+`scripts/test_event.py` fires all four decision-engine action types through Redis in sequence, prints each response to the terminal, and verifies the complete AI pipeline end-to-end.
+
+### Prerequisites
+
+Docker must be running with at least `postgres`, `redis`, and `brain` started:
+
+```bash
+docker compose up -d
+```
+
+Install the Redis client locally if needed:
+
+```bash
+pip install redis
+```
+
+### Running
+
+```bash
+python brain/scripts/test_event.py
+```
+
+### What it does
+
+The script seeds world-state keys (`env_state:mountain`, `env_state:highway`, `env_state:urban`) into Redis, then fires four payloads to `traffic_alerts_channel` and listens on `route_optimizations_channel` for the Brain's response to each one.
+
+| Scenario | Key payload choices | Expected `action_type` |
+|---|---|---|
+| 1 | `event_type: ROUTINE_HEALTH_CHECK`, clear/low traffic, single stop, 3-hour window | `CONTINUE` |
+| 2 | Two stops where stop 2 is geographically closer than stop 1 — forces TSP to reorder | `RE-ROUTE` |
+| 3 | `event_type: TRAFFIC_ALERT`, `courier_status: EN_ROUTE`, single stop | `REQUEST_ALTERNATE_PATH` |
+| 4 | `event_type: TRAFFIC_ALERT`, `courier_status: AT_STOP`, single stop | `DELAY_DEPARTURE` |
+
+Each scenario uses a unique `manifest_id` to bypass the 10-second de-bounce lock. The listener filters responses by `manifest_id` so interleaved messages never corrupt output.
+
+### Example output
+
+```
+Connecting to Redis on localhost:6379 ...
+Seeding world-state into Redis ...
+
+============================================================
+  SCENARIO: CONTINUE
+  manifest_id : TEST-CONTINUE-001
+  event_type  : ROUTINE_HEALTH_CHECK
+  courier_status: EN_ROUTE
+============================================================
+  Firing payload ...
+
+  >>> ACTION  : CONTINUE
+  >>> SEVERITY: low
+  >>> REASON  : All 1 stop(s) on schedule. Traffic: LOW, conditions: clear ...
+
+  Full response:
+  { ... }
+```
