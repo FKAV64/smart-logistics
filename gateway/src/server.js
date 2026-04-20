@@ -68,6 +68,26 @@ app.post('/login', async (req, res) => {
       [user.courier_id]
     );
 
+    // Refresh time windows so the demo always has realistic, relative-to-NOW windows.
+    // Stop 1 (CLI-001): tight 2h window, Stop 2 (CLI-002): relaxed 5h, Stop 3 (CLI-003): tight 2.5h
+    // This differential drives the optimizer to swap Stop 3 before Stop 2 after Stop 1 is delivered.
+    await db.query(`
+      UPDATE client_commande_detail
+      SET window_start = NOW(),
+          window_end   = NOW() + CASE commande_id
+            WHEN 1 THEN interval '2 hours'
+            WHEN 2 THEN interval '5 hours'
+            WHEN 3 THEN interval '2.5 hours'
+          END
+      WHERE commande_id IN (
+        SELECT ccd.commande_id
+        FROM client_commande_detail ccd
+        JOIN manifest_stops ms ON ms.commande_id = ccd.commande_id
+        JOIN daily_manifest dm ON ms.manifest_id = dm.manifest_id
+        WHERE dm.courier_id = $1
+      )
+    `, [user.courier_id]);
+
     // Clear in-memory gateway state for this courier
     resetCourierState(user.courier_id);
 

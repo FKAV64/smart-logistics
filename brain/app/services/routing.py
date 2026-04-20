@@ -154,7 +154,7 @@ class RouteOptimizer:
             _, _, _, _, best_wkt_segments = self._evaluate_sequence(best_sequence, scored_graph, start_time)
 
         # time_saved = difference in REAL travel time — no penalty bleed-through
-        time_saved = max(0, int(orig_actual - best_actual))
+        time_saved = max(0, round(orig_actual - best_actual))
         is_reordered = [s['stop_id'] for s in original_sequence] != [s['stop_id'] for s in best_sequence]
 
         # Stability gate: if the hill-climb improvement rounds to zero minutes, treat
