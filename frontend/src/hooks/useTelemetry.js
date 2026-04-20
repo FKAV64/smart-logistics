@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from 'react'; // Added useState
+import { useEffect, useRef, useState } from 'react';
 import { useCourierStore } from '../store/useCourierStore';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
-const SOCKET_URL = API_BASE_URL.replace(/^http/, 'ws');
+//const API_BASE_URL = 'https://team-005.hackaton.sivas.edu.tr:3000';
+//const SOCKET_URL = API_BASE_URL.replace(/^https/, 'wss');
+// A blank string tells the browser to use the current host (the Vite server)
+const API_BASE_URL = '';
+
+// We point the socket to the /api proxy we just created
+const SOCKET_URL = `wss://${window.location.host}/api`;
 
 export const useTelemetry = () => {
   // NEW: State to track actual socket connection
@@ -19,7 +24,7 @@ export const useTelemetry = () => {
     setActiveRoutes,
     user
   } = useCourierStore();
-  
+
   const userId = user?.id;
   const wsRef = useRef(null);
 
@@ -50,15 +55,15 @@ export const useTelemetry = () => {
               const fmt = (ts) =>
                 ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--';
               const deliveries = data.payload.stops.map((stop) => ({
-                id:           `STOP-${stop.stop_id}`,
-                lat:          stop.latitude,
-                lng:          stop.longitude,
-                time:         fmt(stop.time_window_open),
-                timeEnd:      fmt(stop.time_window_close),
-                destination:  stop.client_first_name,
+                id: `STOP-${stop.stop_id}`,
+                lat: stop.latitude,
+                lng: stop.longitude,
+                time: fmt(stop.time_window_open),
+                timeEnd: fmt(stop.time_window_close),
+                destination: stop.client_first_name,
                 clientNumber: stop.client_phone || '',
-                address:      stop.street_name || `${Number(stop.latitude).toFixed(4)}, ${Number(stop.longitude).toFixed(4)}`,
-                urgency:      stop.delivery_order,
+                address: stop.street_name || `${Number(stop.latitude).toFixed(4)}, ${Number(stop.longitude).toFixed(4)}`,
+                urgency: stop.delivery_order,
               }));
               setDeliveries(deliveries);
               break;
