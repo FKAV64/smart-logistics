@@ -6,8 +6,8 @@ import { useCourierStore } from '../store/useCourierStore';
 // A blank string tells the browser to use the current host (the Vite server)
 const API_BASE_URL = '';
 
-// We point the socket to the /api proxy we just created
-const SOCKET_URL = `wss://${window.location.host}/api`;
+const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const SOCKET_URL = `${protocol}//${window.location.host}/api`;
 
 export const useTelemetry = () => {
   // NEW: State to track actual socket connection
@@ -22,6 +22,7 @@ export const useTelemetry = () => {
     setActiveDelivery,
     updateUser,
     setActiveRoutes,
+    setManifestCompleted,
     user
   } = useCourierStore();
 
@@ -89,6 +90,9 @@ export const useTelemetry = () => {
               console.log('[WS] Received ACTIVE_ROUTE_UPDATE:', data.payload);
               setActiveRoutes([data.payload]);
               break;
+            case 'MANIFEST_COMPLETED':
+              setManifestCompleted();
+              break;
             default:
               console.log('[WS] Unhandled message type:', data.type);
           }
@@ -121,7 +125,7 @@ export const useTelemetry = () => {
         wsRef.current.close();
       }
     };
-  }, [userId, updateVehicleTelemetry, addRecommendation, confirmRecommendationSync, setDeliveries, markDeliveryCompleted, setActiveDelivery, updateUser]);
+  }, [userId, updateVehicleTelemetry, addRecommendation, confirmRecommendationSync, setDeliveries, markDeliveryCompleted, setActiveDelivery, updateUser, setManifestCompleted]);
 
   const sendMessage = (messageObj) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

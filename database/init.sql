@@ -134,9 +134,9 @@ INSERT INTO clients (client_id, first_name, last_name, email, phone) VALUES
 ON CONFLICT (client_id) DO NOTHING;
 
 INSERT INTO client_commande_detail (commande_id, client_id, weight_kg, window_start, window_end, lat, lon) VALUES 
-(1, 'CLI-001', 5.5, CURRENT_DATE + TIME '12:00:00', CURRENT_DATE + TIME '14:00:00', 39.750, 37.015),
-(2, 'CLI-002', 2.0, CURRENT_DATE + TIME '14:30:00', CURRENT_DATE + TIME '16:00:00', 39.755, 37.020),
-(3, 'CLI-003', 15.0, CURRENT_DATE + TIME '17:00:00', CURRENT_DATE + TIME '19:00:00', 39.760, 37.010)
+(1, 'CLI-001', 5.5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + interval '2 hours', 39.750, 37.015),
+(2, 'CLI-002', 2.0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + interval '5 hours', 39.755, 37.020),
+(3, 'CLI-003', 15.0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + interval '2.5 hours', 39.760, 37.010)
 ON CONFLICT (commande_id) DO NOTHING;
 
 INSERT INTO daily_manifest (manifest_id, courier_id, date, status) VALUES 

@@ -28,7 +28,7 @@ services:
       context: ./simulator
     container_name: smart_logistics_tomtom_mock
     environment:
-      FORCE_CONGESTION: "true"
+      FORCE_CONGESTION: "false"
     ports:
       - "7777:7777"
 

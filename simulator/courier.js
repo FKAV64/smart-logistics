@@ -22,6 +22,7 @@ let pingCount = 0;
 
 let activeRouteCoords = null;
 let activeRouteIndex = 0;
+let isDone = false;
 
 // Move from current position toward target by up to distKm; returns new position + whether target was reached
 function stepToward(fromLat, fromLon, toLat, toLon, distKm) {
@@ -82,6 +83,7 @@ ws.on('open', () => {
   }));
 
   setInterval(() => {
+    if (isDone) return;
     pingCount++;
     const target = WAYPOINTS[waypointIdx];
     const speed = VAN_SPEED_KMPH + (Math.random() - 0.5) * 4;
@@ -107,7 +109,12 @@ ws.on('open', () => {
     if (distToStop.reached) {
       console.log(`[Courier] Arrived at ${target.name} (stop_id: ${target.stop_id}).`);
       ws.send(JSON.stringify({ type: 'STOP_REACHED', stop_id: String(target.stop_id) }));
-      waypointIdx = (waypointIdx + 1) % WAYPOINTS.length;
+      waypointIdx++;
+      if (waypointIdx >= WAYPOINTS.length) {
+        isDone = true;
+        console.log('[Courier] All deliveries completed. Simulator halted.');
+        return;
+      }
     }
 
     currentLat = step.lat;
@@ -128,6 +135,25 @@ ws.on('message', (raw) => {
   try {
     const msg = JSON.parse(raw);
     if (msg.type !== 'VEHICLE_TELEMETRY') console.log(`[Courier] ← ${msg.type}`);
+
+    if (msg.type === 'SIMULATOR_RESTART') {
+      console.log('[Courier] Received SIMULATOR_RESTART. Rebooting trace coordinates...');
+      currentLat = parseFloat(process.env.START_LAT || '39.7200');
+      currentLon = parseFloat(process.env.START_LON || '37.0100');
+      waypointIdx = 0;
+      pingCount = 0;
+      activeRouteCoords = null;
+      activeRouteIndex = 0;
+      isDone = false;
+      return;
+    }
+
+    if (msg.type === 'SIMULATOR_RESEQUENCE' && Array.isArray(msg.payload)) {
+      const orderMap = {};
+      msg.payload.forEach(s => orderMap[s.stop_id] = s.stop_order);
+      WAYPOINTS.sort((a, b) => orderMap[a.stop_id] - orderMap[b.stop_id]);
+      console.log(`[Courier] Resequenced WAYPOINTS vector. Next physically targeted stop is: STOP-${WAYPOINTS[waypointIdx]?.stop_id || 'UNKNOWN'}`);
+    }
 
     if (msg.type === 'ACTIVE_ROUTE_UPDATE' && msg.payload?.geometry?.coordinates) {
       let coords = msg.payload.geometry.coordinates;

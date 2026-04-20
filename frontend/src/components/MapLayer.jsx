@@ -71,9 +71,10 @@ const MapLayer = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Find the hovered recommendation to extract its proposed route
-  const hoveredRec = pendingRecommendations.find(r => r.id === hoveredRecommendationId);
-  const proposedRouteCoords = hoveredRec?.proposedRouteRoutePoints || [];
+  // Show proposed route for explicitly hovered card, or auto-show for the latest pending card
+  const hoveredRec = hoveredRecommendationId
+    ? pendingRecommendations.find(r => r.id === hoveredRecommendationId)
+    : pendingRecommendations[pendingRecommendations.length - 1];
 
   return (
     <MapContainer center={[39.7505, 37.0150]} zoom={12} className="map-container">
@@ -102,14 +103,7 @@ const MapLayer = () => {
         );
       })}
 
-      {/* Render Active Routes */}
-      {activeRoutes.map((routeData, index) => (
-        <GeoJSON 
-          key={`active-route-${Math.random()}`} // Force remount when data changes
-          data={routeData} 
-          style={{ color: '#3b82f6', weight: 4, opacity: 0.7 }} 
-        />
-      ))}
+
 
       {/* Render Proposed Route (Overlay, dashed) */}
       {hoveredRec?.route_geojson && (
@@ -133,13 +127,38 @@ const MapLayer = () => {
           'offline': '#6b7280'
         };
 
+        // Dynamic Progressive Vanishing Trace calculation
+        let currentRouteCoords = null;
+        if (activeRoutes.length > 0 && activeRoutes[0]?.geometry?.coordinates) {
+          const coords = activeRoutes[0].geometry.coordinates; // [lng, lat]
+          let closestIdx = 0;
+          let minDist = Infinity;
+          for(let i = 0; i < coords.length; i++) {
+            const dx = coords[i][0] - vehicle.lng;
+            const dy = coords[i][1] - vehicle.lat;
+            const dist = dx*dx + dy*dy;
+            if(dist < minDist) {
+              minDist = dist;
+              closestIdx = i;
+            }
+          }
+          
+          // Spatial bounds fail-safe lock: If the closest point calculation hooks onto a segment >~2km across the map 
+          // (such as a switchback), preserve the array to stop the polyline from visually collapsing 
+          if(minDist > 0.0005) {
+            closestIdx = 0;
+          }
+
+          currentRouteCoords = coords.slice(closestIdx).map(c => [c[1], c[0]]);
+        }
+
         return (
           <React.Fragment key={vehicle.id}>
             {/* Draw the road the vehicle is taking! */}
-            {vehicle.currentRoute && (
+            {currentRouteCoords && (
               <Polyline 
-                positions={vehicle.currentRoute}
-                pathOptions={{ color: colorMap[status] || '#6b7280', weight: 5, opacity: 0.8 }}
+                positions={currentRouteCoords}
+                pathOptions={{ color: colorMap[status] || '#3b82f6', weight: 5, opacity: 0.8 }}
               />
             )}
             <Marker 

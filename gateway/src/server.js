@@ -8,7 +8,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./db');
 const { pubClient } = require('./redisClient');
-const { setupWebSocket } = require('./wsHandler');
+const { setupWebSocket, resetCourierState } = require('./wsHandler');
 
 const app = express();
 const server = http.createServer(app);
@@ -47,7 +47,37 @@ app.post('/login', async (req, res) => {
       { expiresIn: '12h' }
     );
 
-    res.json({ 
+    // Reset manifest for a clean demo restart
+    await db.query(`
+      UPDATE manifest_stops
+      SET delivery_status = 'PENDING',
+          actual_delivery_time = NULL,
+          delivery_order = sub.rn
+      FROM (
+        SELECT ms.stop_id,
+               ROW_NUMBER() OVER (ORDER BY ms.stop_id) AS rn
+        FROM manifest_stops ms
+        JOIN daily_manifest dm ON ms.manifest_id = dm.manifest_id
+        WHERE dm.courier_id = $1
+      ) sub
+      WHERE manifest_stops.stop_id = sub.stop_id
+    `, [user.courier_id]);
+
+    await db.query(
+      `UPDATE daily_manifest SET status = 'PLANNED', ai_recommendation = NULL WHERE courier_id = $1`,
+      [user.courier_id]
+    );
+
+    // Clear in-memory gateway state for this courier
+    resetCourierState(user.courier_id);
+
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ type: 'SIMULATOR_RESTART' }));
+      }
+    });
+
+    res.json({
       success: true, 
       token, 
       role: 'courier',

@@ -48,12 +48,10 @@ const DeliveryItem = ({ delivery, isActive, isCompleted }) => {
             <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>{address}</span>
           </div>
         )}
-        {!isCompleted && (
-          <div className="delivery-detail">
-            <Phone size={16} className="icon-green" />
-            <a href={`tel:${clientNumber}`} className="phone-link">{clientNumber}</a>
-          </div>
-        )}
+        <div className="delivery-detail">
+          <Phone size={16} className={isCompleted ? "icon-dim" : "icon-green"} />
+          <a href={!isCompleted ? `tel:${clientNumber}` : undefined} className={`phone-link ${isCompleted ? 'text-dim' : ''}`}>{clientNumber}</a>
+        </div>
       </div>
 
       <div className="delivery-card-footer">

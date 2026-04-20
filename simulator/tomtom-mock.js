@@ -12,9 +12,14 @@ const FRC_ROAD_TYPES = {
   'FRC6': 'mountain','FRC7': 'mountain',
 };
 
+const UPTIME_START = Date.now();
+
 /** Traffic congestion factor 0 (free flow) → 1 (gridlock), driven by time of day */
 function getTrafficFactor() {
-  if (process.env.FORCE_CONGESTION === 'true') return 0.90; // Demo mode: always HEAVY traffic
+  if (process.env.FORCE_CONGESTION === 'true') return 0.90; // Demo mode override
+  
+  // For proper live demo: smoothly trigger HEAVY congestion 3 minutes after mockup launch
+  if (Date.now() - UPTIME_START > 3 * 60 * 1000) return 0.90;
   const now = new Date();
   const h   = now.getHours() + now.getMinutes() / 60;
   const morningRush = Math.exp(-((h - 8.0) ** 2) / 1.5);

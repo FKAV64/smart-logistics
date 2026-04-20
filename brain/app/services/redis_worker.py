@@ -26,13 +26,9 @@ def _build_reason(base_reason: str, stop_probs: dict) -> str:
 
 
 def _dynamic_reason(action: str, res: dict, message_data: dict, stop_probs: dict, courier_status: str) -> str:
-    """Generates a rich, context-aware reason string using real payload data."""
+    """Generates a concise reason string matching UI limitations."""
     env         = message_data.get('environment_horizon', {})
-    traffic     = env.get('traffic_level', 'moderate').upper()
     weather     = env.get('weather_condition', 'clear').lower()
-    road_type   = env.get('road_type', 'urban').lower()
-    incident    = env.get('incident_reported', False)
-    time_bucket = env.get('time_bucket', 'midday').replace('_', ' ')
     stops       = [s for s in message_data.get('unvisited_stops', []) if s.get('stop_id') != 'COURIER_START']
     n_stops     = len(stops)
     time_saved  = res.get('time_saved', 0)
@@ -44,39 +40,19 @@ def _dynamic_reason(action: str, res: dict, message_data: dict, stop_probs: dict
     high_risk.sort(key=lambda x: x[1], reverse=True)
     risk_suffix = ''
     if high_risk:
-        risk_suffix = ' Elevated delay probability on: ' + ', '.join(f'Stop #{sid} ({int(p*100)}%)' for sid, p in high_risk[:2]) + '.'
-
-    weather_note = '' if weather in ('clear', 'cloudy') else f' Weather: {weather}.'
-    incident_note = ' Road incident reported on ahead segment.' if incident else ''
+        risk_suffix = ' High delay risk: ' + ', '.join(f'Stop #{sid} ({int(p*100)}%)' for sid, p in high_risk[:2]) + '.'
 
     if action == 'NOTIFY_DISPATCH_LATE':
-        return (
-            f"Route health FAILED — {n_stops} pending stop(s) cannot be reached within their time windows. "
-            f"Predicted overshoot: {late_min} min. Traffic on {road_type} roads is {traffic} "
-            f"during {time_bucket}.{weather_note}{incident_note}{risk_suffix}"
-        )
+        return f"Route health FAILED — {n_stops} pending stop(s) unreachable. Predicted overshoot: {late_min} min."
     elif action == 'RE-ROUTE':
-        new_seq = [s['stop_id'] for s in res.get('best_sequence', stops) if s.get('stop_id') != 'COURIER_START']
-        seq_str = ' → '.join(f'#{sid}' for sid in new_seq) if new_seq else 'optimized order'
-        return (
-            f"AI resequenced {n_stops} stop(s) to avoid {traffic.lower()} congestion on {road_type} roads. "
-            f"New order: {seq_str}. Estimated saving: {time_saved} min.{weather_note}{risk_suffix}"
-        )
+        return f"Re-ordering stops saves {time_saved} minutes and protects time windows.{risk_suffix}"
     elif action == 'DELAY_DEPARTURE':
-        return (
-            f"Heavy congestion ({traffic}) detected {road_type} ahead during {time_bucket}. "
-            f"Holding at current stop for ~15 min is predicted to reduce total journey time by up to {max(time_saved, 12)} min.{weather_note}{incident_note}"
-        )
+        prob = 90 if weather in ('rainy', 'snowy', 'icy', 'foggy') else 60
+        return f"{prob}% storm risk. Delay depature by 20mins."
     elif action == 'REQUEST_ALTERNATE_PATH':
-        return (
-            f"Stop sequence is optimal, but {traffic.lower()} traffic{'and an incident ' if incident else ' '}detected on the current segment. "
-            f"Re-routing via alternate {road_type} path.{weather_note} Max segment delay: {max_delay} min.{risk_suffix}"
-        )
+        return f"Re-routing via alternate path. Max route delay: {max_delay} min.{risk_suffix}"
     else:  # CONTINUE
-        return (
-            f"All {n_stops} stop(s) on schedule. Traffic: {traffic}, conditions: {weather}, "
-            f"road type: {road_type}. No intervention required.{risk_suffix}"
-        )
+        return "All stops on schedule. No intervention required."
 
 
 class RedisWorker:
@@ -97,7 +73,7 @@ class RedisWorker:
 
     def _acquire_lock(self, manifest_id: str) -> bool:
         lock_key = f"lock:optimize:{manifest_id}"
-        return self.redis.set(lock_key, "locked", nx=True, ex=10)
+        return self.redis.set(lock_key, "locked", nx=True, ex=30)
 
     def process_message(self, message_data: dict):
         if message_data.get('type') == 'PING':
@@ -157,7 +133,7 @@ class RedisWorker:
             if res.get("health") == "FAILED":
                 action   = "NOTIFY_DISPATCH_LATE"
                 severity = "CRITICAL"
-            elif res["is_reordered"]:
+            elif res["is_reordered"] and res.get("time_saved", 0) > 0:
                 action   = "RE-ROUTE"
                 severity = "high"
             elif message_data.get("event_type") == "TRAFFIC_ALERT" or res["max_delay"] > 15:

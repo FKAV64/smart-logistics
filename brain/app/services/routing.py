@@ -117,7 +117,7 @@ class RouteOptimizer:
 
         # Evaluate original sequence
         original_sequence = copy.deepcopy(unvisited_stops)
-        orig_cost, orig_actual, orig_delay, orig_late, _ = self._evaluate_sequence(
+        orig_cost, orig_actual, orig_delay, orig_late, orig_wkt_segments = self._evaluate_sequence(
             original_sequence, scored_graph, start_time
         )
 
@@ -156,6 +156,16 @@ class RouteOptimizer:
         # time_saved = difference in REAL travel time — no penalty bleed-through
         time_saved = max(0, int(orig_actual - best_actual))
         is_reordered = [s['stop_id'] for s in original_sequence] != [s['stop_id'] for s in best_sequence]
+
+        # Stability gate: if the hill-climb improvement rounds to zero minutes, treat
+        # the original sequence as the "best" one. Prevents silent map oscillation
+        # between symmetric orderings on CONTINUE actions.
+        if time_saved <= 0:
+            best_sequence = original_sequence
+            best_wkt_segments = orig_wkt_segments
+            best_delay = orig_delay
+            best_late = orig_late
+            is_reordered = False
 
         health = "OPTIMAL"
         if best_cost >= 10000:

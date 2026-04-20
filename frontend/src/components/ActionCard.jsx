@@ -51,7 +51,7 @@ const ActionCard = ({ recommendation, sendMessage }) => {
   const getStatusClass = () => {
     if (isCritical) return 'status-critical';
     if (isReroute) return 'status-reroute';
-    if (sevLower === 'medium') return 'status-info';
+    if (sevLower === 'medium') return 'status-reroute';
     return 'status-on-time';
   };
 
