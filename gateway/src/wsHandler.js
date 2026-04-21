@@ -68,12 +68,32 @@ function setupWebSocket(wss) {
   // Route Brain AI responses to the correct frontend clients
   aiEvents.on('optimization_received', (data) => {
     const rec = data.ai_recommendation || {};
-    
+
     // Cache the active GeoJSON sequence dynamically for 5km ahead calculations
     if (rec.route_geojson && data.courier_id) {
       if (!courierState[data.courier_id]) courierState[data.courier_id] = { lastPoint: null, lastPosition: null, accumulatedDistanceKM: 0, segmentStartTime: Date.now() };
       courierState[data.courier_id].activeGeoJSON = rec.route_geojson;
     }
+
+    // Push route geometry immediately for all actions except RE-ROUTE (which waits for user approval)
+    if (rec.route_geojson && rec.action_type !== 'RE-ROUTE') {
+      wss.clients.forEach((client) => {
+        if (client.readyState !== 1) return;
+        if (client.role === 'courier' && client.courierId === data.courier_id) {
+          client.send(JSON.stringify({ type: 'ACTIVE_ROUTE_UPDATE', payload: rec.route_geojson }));
+        }
+      });
+    }
+
+    // For RE-ROUTE: hold the proposed route until the user approves
+    if (rec.action_type === 'RE-ROUTE' && data.courier_id) {
+      if (!courierState[data.courier_id]) courierState[data.courier_id] = { lastPoint: null, lastPosition: null, accumulatedDistanceKM: 0, segmentStartTime: Date.now() };
+      courierState[data.courier_id].pendingRouteGeoJSON = rec.route_geojson || null;
+    }
+
+    // CONTINUE means all clear — no recommendation card needed
+    if (rec.action_type === 'CONTINUE') return;
+
     const frontendPayload = {
       id:                       `${data.manifest_id}-${Date.now()}`,
       manifest_id:              data.manifest_id,
@@ -93,9 +113,6 @@ function setupWebSocket(wss) {
       if (client.readyState !== 1) return;
       if (client.role === 'courier' && client.courierId === data.courier_id) {
         client.send(JSON.stringify({ type: 'AI_ROUTE_RECOMMENDATION', payload: frontendPayload }));
-        if (rec.route_geojson) {
-          client.send(JSON.stringify({ type: 'ACTIVE_ROUTE_UPDATE', payload: rec.route_geojson }));
-        }
       }
     });
   });
@@ -195,8 +212,8 @@ function setupWebSocket(wss) {
 
               // Fetch real environment from TomTom for the courier's current position
               const lastPos = courierState[ws.courierId]?.lastPoint?.geometry?.coordinates;
-              const hcLat   = lastPos ? lastPos[1] : 39.7505;
-              const hcLon   = lastPos ? lastPos[0] : 37.0150;
+              const hcLat   = lastPos ? lastPos[1] : parseFloat(process.env.START_LAT || '39.7200');
+              const hcLon   = lastPos ? lastPos[0] : parseFloat(process.env.START_LON || '37.0100');
               const env     = await fetchEnvironment(hcLat, hcLon);
 
               await pubClient.publish('traffic_alerts_channel', JSON.stringify({
@@ -357,6 +374,31 @@ function setupWebSocket(wss) {
               }
             });
             console.log(`[DELIVERY] Stop ${stopId} marked DELIVERED for ${ws.courierId}`);
+
+            // Check if all stops are now delivered
+            const remaining = await db.query(
+              `SELECT COUNT(*) FROM manifest_stops ms
+               JOIN daily_manifest dm ON ms.manifest_id = dm.manifest_id
+               WHERE dm.courier_id = $1 AND ms.delivery_status = 'PENDING'`,
+              [ws.courierId]
+            );
+            if (parseInt(remaining.rows[0].count, 10) === 0) {
+              await db.query(
+                `UPDATE daily_manifest SET status = 'COMPLETED' WHERE courier_id = $1`,
+                [ws.courierId]
+              );
+              if (courierState[ws.courierId]?.healthCheckInterval) {
+                clearInterval(courierState[ws.courierId].healthCheckInterval);
+                courierState[ws.courierId].healthCheckInterval = null;
+              }
+              wss.clients.forEach((client) => {
+                if (client.readyState !== 1) return;
+                if (client.role === 'courier' && client.courierId === ws.courierId) {
+                  client.send(JSON.stringify({ type: 'MANIFEST_COMPLETED' }));
+                }
+              });
+              console.log(`[MANIFEST] All stops delivered for ${ws.courierId}. Demo complete.`);
+            }
           } catch (err) { console.error('Error marking stop delivered:', err); }
         }
 
@@ -391,6 +433,17 @@ function setupWebSocket(wss) {
                 client.send(JSON.stringify({ type: 'SIMULATOR_RESEQUENCE', payload: recommendedStopsOrder }));
               }
             });
+
+            // Apply the deferred route update now that the user has approved
+            const pendingGeoJSON = courierState[ws.courierId]?.pendingRouteGeoJSON;
+            if (pendingGeoJSON) {
+              wss.clients.forEach((client) => {
+                if (client.readyState === 1 && client.role === 'courier' && client.courierId === ws.courierId) {
+                  client.send(JSON.stringify({ type: 'ACTIVE_ROUTE_UPDATE', payload: pendingGeoJSON }));
+                }
+              });
+              courierState[ws.courierId].pendingRouteGeoJSON = null;
+            }
           } catch (error) {
             await db.query('ROLLBACK');
             console.error('Error approving route', error);
@@ -402,6 +455,9 @@ function setupWebSocket(wss) {
         // ROUTE REFUSAL — no DB change, just acknowledge
         // ------------------------------------------------------------------
         if (data.type === 'REFUSE_ROUTE') {
+          if (courierState[ws.courierId]) {
+            courierState[ws.courierId].pendingRouteGeoJSON = null;
+          }
           ws.send(JSON.stringify({ type: 'ROUTE_SYNC_CONFIRMED', payload: { id: data.payload?.id, status: 'removed' } }));
         }
 
@@ -419,4 +475,19 @@ function setupWebSocket(wss) {
   });
 }
 
-module.exports = { setupWebSocket };
+function resetCourierState(courierId) {
+  if (courierState[courierId]?.healthCheckInterval) {
+    clearInterval(courierState[courierId].healthCheckInterval);
+  }
+  courierState[courierId] = {
+    lastPoint: null,
+    lastPosition: null,
+    accumulatedDistanceKM: 0,
+    segmentStartTime: Date.now(),
+    activeGeoJSON: null,
+    healthCheckInterval: null,
+    pendingRouteGeoJSON: null,
+  };
+}
+
+module.exports = { setupWebSocket, resetCourierState };
