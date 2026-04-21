@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useCourierStore } from './store/useCourierStore';
 import LoginPage from './pages/LoginPage';
@@ -26,9 +26,6 @@ const ProtectedRoute = ({ children }) => {
 };
 
 function App() {
-  const initFromStorage = useCourierStore((s) => s.initFromStorage);
-  useEffect(() => { initFromStorage(); }, []);
-
   return (
     <ErrorBoundary>
       <Routes>

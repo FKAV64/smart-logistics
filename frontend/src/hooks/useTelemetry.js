@@ -22,7 +22,6 @@ export const useTelemetry = () => {
     setActiveDelivery,
     updateUser,
     setActiveRoutes,
-    setManifestCompleted,
     user
   } = useCourierStore();
 
@@ -90,9 +89,6 @@ export const useTelemetry = () => {
               console.log('[WS] Received ACTIVE_ROUTE_UPDATE:', data.payload);
               setActiveRoutes([data.payload]);
               break;
-            case 'MANIFEST_COMPLETED':
-              setManifestCompleted();
-              break;
             default:
               console.log('[WS] Unhandled message type:', data.type);
           }
@@ -125,7 +121,7 @@ export const useTelemetry = () => {
         wsRef.current.close();
       }
     };
-  }, [userId, updateVehicleTelemetry, addRecommendation, confirmRecommendationSync, setDeliveries, markDeliveryCompleted, setActiveDelivery, updateUser, setManifestCompleted]);
+  }, [userId, updateVehicleTelemetry, addRecommendation, confirmRecommendationSync, setDeliveries, markDeliveryCompleted, setActiveDelivery, updateUser]);
 
   const sendMessage = (messageObj) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

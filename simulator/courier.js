@@ -22,7 +22,6 @@ let pingCount = 0;
 
 let activeRouteCoords = null;
 let activeRouteIndex = 0;
-let isDone = false;
 
 // Move from current position toward target by up to distKm; returns new position + whether target was reached
 function stepToward(fromLat, fromLon, toLat, toLon, distKm) {
@@ -83,7 +82,6 @@ ws.on('open', () => {
   }));
 
   setInterval(() => {
-    if (isDone) return;
     pingCount++;
     const target = WAYPOINTS[waypointIdx];
     const speed = VAN_SPEED_KMPH + (Math.random() - 0.5) * 4;
@@ -109,12 +107,7 @@ ws.on('open', () => {
     if (distToStop.reached) {
       console.log(`[Courier] Arrived at ${target.name} (stop_id: ${target.stop_id}).`);
       ws.send(JSON.stringify({ type: 'STOP_REACHED', stop_id: String(target.stop_id) }));
-      waypointIdx++;
-      if (waypointIdx >= WAYPOINTS.length) {
-        isDone = true;
-        console.log('[Courier] All deliveries completed. Simulator halted.');
-        return;
-      }
+      waypointIdx = (waypointIdx + 1) % WAYPOINTS.length;
     }
 
     currentLat = step.lat;
@@ -144,7 +137,6 @@ ws.on('message', (raw) => {
       pingCount = 0;
       activeRouteCoords = null;
       activeRouteIndex = 0;
-      isDone = false;
       return;
     }
 

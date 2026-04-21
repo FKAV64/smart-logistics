@@ -8,7 +8,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./db');
 const { pubClient } = require('./redisClient');
-const { setupWebSocket, resetCourierState } = require('./wsHandler');
+const { setupWebSocket } = require('./wsHandler');
 
 const app = express();
 const server = http.createServer(app);
@@ -47,57 +47,13 @@ app.post('/login', async (req, res) => {
       { expiresIn: '12h' }
     );
 
-    // Reset manifest for a clean demo restart
-    await db.query(`
-      UPDATE manifest_stops
-      SET delivery_status = 'PENDING',
-          actual_delivery_time = NULL,
-          delivery_order = sub.rn
-      FROM (
-        SELECT ms.stop_id,
-               ROW_NUMBER() OVER (ORDER BY ms.stop_id) AS rn
-        FROM manifest_stops ms
-        JOIN daily_manifest dm ON ms.manifest_id = dm.manifest_id
-        WHERE dm.courier_id = $1
-      ) sub
-      WHERE manifest_stops.stop_id = sub.stop_id
-    `, [user.courier_id]);
-
-    await db.query(
-      `UPDATE daily_manifest SET status = 'PLANNED', ai_recommendation = NULL WHERE courier_id = $1`,
-      [user.courier_id]
-    );
-
-    // Refresh time windows so the demo always has realistic, relative-to-NOW windows.
-    // Stop 1 (CLI-001): tight 2h window, Stop 2 (CLI-002): relaxed 5h, Stop 3 (CLI-003): tight 2.5h
-    // This differential drives the optimizer to swap Stop 3 before Stop 2 after Stop 1 is delivered.
-    await db.query(`
-      UPDATE client_commande_detail
-      SET window_start = NOW(),
-          window_end   = NOW() + CASE commande_id
-            WHEN 1 THEN interval '2 hours'
-            WHEN 2 THEN interval '5 hours'
-            WHEN 3 THEN interval '2.5 hours'
-          END
-      WHERE commande_id IN (
-        SELECT ccd.commande_id
-        FROM client_commande_detail ccd
-        JOIN manifest_stops ms ON ms.commande_id = ccd.commande_id
-        JOIN daily_manifest dm ON ms.manifest_id = dm.manifest_id
-        WHERE dm.courier_id = $1
-      )
-    `, [user.courier_id]);
-
-    // Clear in-memory gateway state for this courier
-    resetCourierState(user.courier_id);
-
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(JSON.stringify({ type: 'SIMULATOR_RESTART' }));
       }
     });
 
-    res.json({
+    res.json({ 
       success: true, 
       token, 
       role: 'courier',

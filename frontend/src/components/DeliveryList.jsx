@@ -1,11 +1,10 @@
 import React from 'react';
-import { CheckCircle2 } from 'lucide-react';
 import DeliveryItem from './DeliveryItem';
 import { useCourierStore } from '../store/useCourierStore';
 import './DeliveryList.css';
 
 const DeliveryList = ({ deliveries }) => {
-  const { activeDeliveryId, completedDeliveryIds, isManifestCompleted } = useCourierStore();
+  const { activeDeliveryId, completedDeliveryIds } = useCourierStore();
 
   // Helper to parse "HH:MM" into minutes from midnight for sorting
   const timeToMinutes = (timeStr) => {
@@ -27,25 +26,19 @@ const DeliveryList = ({ deliveries }) => {
         <span className="count-badge">{deliveries.length} Total</span>
       </div>
       <div className="scrollable-list">
-        {isManifestCompleted ? (
-          <div className="manifest-completed-banner">
-            <CheckCircle2 size={32} />
-            <p>All Deliveries Completed</p>
-          </div>
-        ) : (
-          sortedDeliveries.map((delivery) => {
-            const isActive = delivery.id === activeDeliveryId;
-            const isCompleted = completedDeliveryIds.includes(delivery.id);
-            return (
-              <DeliveryItem
-                key={delivery.id}
-                delivery={delivery}
-                isActive={isActive}
-                isCompleted={isCompleted}
-              />
-            );
-          })
-        )}
+        {sortedDeliveries.map((delivery) => {
+          const isActive = delivery.id === activeDeliveryId;
+          const isCompleted = completedDeliveryIds.includes(delivery.id);
+          
+          return (
+            <DeliveryItem 
+              key={delivery.id} 
+              delivery={delivery} 
+              isActive={isActive}
+              isCompleted={isCompleted}
+            />
+          );
+        })}
       </div>
     </div>
   );

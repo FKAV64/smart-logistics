@@ -13,7 +13,6 @@ export const useCourierStore = create((set) => ({
   deliveries: [], // Populated via DAILY_MANIFEST_LOADED WebSocket event on login
   activeDeliveryId: null,
   completedDeliveryIds: [],
-  isManifestCompleted: false,
 
 
 
@@ -117,22 +116,7 @@ export const useCourierStore = create((set) => ({
 
 
 
-  setActiveRoutes: (routes) => {
-    const normalized = routes.map((route) => {
-      if (route?.geometry?.type === 'MultiLineString') {
-        return {
-          ...route,
-          geometry: {
-            ...route.geometry,
-            type: 'LineString',
-            coordinates: route.geometry.coordinates.flat(1),
-          },
-        };
-      }
-      return route;
-    });
-    set({ activeRoutes: normalized });
-  },
+  setActiveRoutes: (routes) => set({ activeRoutes: routes }),
 
   setHoveredRecommendation: (recommendationId) =>
     set({ hoveredRecommendationId: recommendationId }),
@@ -157,7 +141,6 @@ export const useCourierStore = create((set) => ({
       }
 
       localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
 
       set({ user: data.user, isAuthenticated: true });
       return { success: true };
@@ -171,8 +154,6 @@ export const useCourierStore = create((set) => ({
     set((state) => ({
       user: state.user ? { ...state.user, profileImage: imageData } : null
     })),
-
-  setManifestCompleted: () => set({ isManifestCompleted: true }),
 
   setDeliveries: (deliveries) => set({ deliveries }),
 
@@ -189,39 +170,8 @@ export const useCourierStore = create((set) => ({
       user: state.user ? { ...state.user, ...userData } : userData
     })),
 
-  initFromStorage: () => {
-    const token = localStorage.getItem('token');
-    const userRaw = localStorage.getItem('user');
-    if (!token || !userRaw) return;
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      if (payload.exp * 1000 < Date.now()) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        return;
-      }
-      set({ user: JSON.parse(userRaw), isAuthenticated: true });
-    } catch {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-    }
-  },
-
   logout: () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    set({
-      user: null,
-      isAuthenticated: false,
-      vehicles: [],
-      activeRoutes: [],
-      pendingRecommendations: [],
-      hoveredRecommendationId: null,
-      deliveries: [],
-      activeDeliveryId: null,
-      completedDeliveryIds: [],
-      isOnBreak: false,
-      isManifestCompleted: false,
-    });
+    set({ user: null, isAuthenticated: false });
   },
 }));

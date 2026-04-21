@@ -71,10 +71,9 @@ const MapLayer = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Show proposed route for explicitly hovered card, or auto-show for the latest pending card
-  const hoveredRec = hoveredRecommendationId
-    ? pendingRecommendations.find(r => r.id === hoveredRecommendationId)
-    : pendingRecommendations[pendingRecommendations.length - 1];
+  // Find the hovered recommendation to extract its proposed route
+  const hoveredRec = pendingRecommendations.find(r => r.id === hoveredRecommendationId);
+  const proposedRouteCoords = hoveredRec?.proposedRouteRoutePoints || [];
 
   return (
     <MapContainer center={[39.7505, 37.0150]} zoom={12} className="map-container">

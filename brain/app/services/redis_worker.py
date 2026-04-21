@@ -133,7 +133,7 @@ class RedisWorker:
             if res.get("health") == "FAILED":
                 action   = "NOTIFY_DISPATCH_LATE"
                 severity = "CRITICAL"
-            elif res["is_reordered"] and res.get("time_saved", 0) > 0:
+            elif res["is_reordered"]:
                 action   = "RE-ROUTE"
                 severity = "high"
             elif message_data.get("event_type") == "TRAFFIC_ALERT" or res["max_delay"] > 15:
